@@ -68,8 +68,9 @@ class Http:
         self.gt_gap = 60.0 / max(1, gt_rpm)
         self._last_gt = 0.0
         self.calls = 0
+        self.rate_limited = 0
 
-    def get(self, url, params=None, headers=None, timeout=60, retries=4):
+    def get(self, url, params=None, headers=None, timeout=60, retries=4, backoff=20):
         for attempt in range(retries):
             self.calls += 1
             try:
@@ -79,7 +80,8 @@ class Http:
                 time.sleep(5 * (attempt + 1))
                 continue
             if r.status_code == 429 or r.status_code >= 500:
-                wait = _retry_after(r) or 20 * (attempt + 1)
+                self.rate_limited += r.status_code == 429
+                wait = _retry_after(r) or backoff * (attempt + 1)
                 log.warning("%s → %s, пауза %s с", url, r.status_code, wait)
                 time.sleep(wait)
                 continue
@@ -94,12 +96,19 @@ class Http:
         return r.json()
 
     def gt(self, path, params=None):
-        """GeckoTerminal: бесплатный лимит 30 запросов в минуту — держим паузу между вызовами."""
+        """GeckoTerminal: бесплатный лимит 30 запросов в минуту — держим паузу между вызовами.
+        На серверах GitHub лимит делят с чужими проектами, поэтому после отказа (429) замедляемся."""
         wait = self._last_gt + self.gt_gap - time.time()
         if wait > 0:
             time.sleep(wait)
         self._last_gt = time.time()
-        return self.get(GT_API + path, params=params, headers={"Accept": "application/json;version=20230302"})
+        before = self.rate_limited
+        try:
+            return self.get(GT_API + path, params=params, headers={"Accept": "application/json;version=20230302"},
+                            retries=3, backoff=15)
+        finally:
+            if self.rate_limited > before:
+                self.gt_gap = min(self.gt_gap * 1.5, 12.0)
 
 
 def _retry_after(r):
@@ -116,7 +125,7 @@ def build_universe(http: Http, size: int):
     headers = {"x-cg-demo-api-key": key} if key else None
     try:
         rows = http.get(CG_MARKETS, params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 150, "page": 1},
-                        headers=headers)
+                        headers=headers, retries=2)
         out, seen = [], set()
         for r in rows or []:
             sym, name = str(r.get("symbol") or "").upper(), str(r.get("name") or "")
@@ -354,11 +363,15 @@ def gt_daily_volumes(http: Http, net: str, addr: str) -> list[float]:
     return [num(r[5]) or 0.0 for r in full]
 
 
-def collect_gt(http: Http, clf: S.Classifier, cfg: dict) -> tuple[list[dict], dict]:
+def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float) -> tuple[list[dict], dict]:
     nets = resolve_networks(http, cfg)
     by_id: dict[str, dict] = {}
+    stopped = False
     for chain, net in nets:
         for page in range(1, cfg["gt_pages_per_network"] + 1):
+            if time.time() > deadline:
+                stopped = True
+                break
             try:
                 j = http.gt(f"/networks/{net}/pools",
                             {"page": page, "sort": "h24_volume_usd_desc", "include": "base_token,quote_token,dex"})
@@ -374,6 +387,7 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict) -> tuple[list[dict], di
                 if rec:
                     by_id[rec["id"]] = rec
     recs = list(by_id.values())
+    log.info("GeckoTerminal: %d подходящих пулов в %d сетях, отказов по лимиту: %d", len(recs), len(nets), http.rate_limited)
 
     # Дневной объём за 30 дней — отдельный запрос на пул, поэтому только для самых интересных
     n = cfg["ohlcv_pools"]
@@ -381,7 +395,14 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict) -> tuple[list[dict], di
     top_apr = sorted(recs, key=lambda r: r["v24"] * r["fee"] / r["tvl"], reverse=True)
     pick = list({r["id"]: r for r in top_vol + top_apr}.values())[:n]
     done = 0
-    for r in pick:
+    for i, r in enumerate(pick, 1):
+        if time.time() > deadline:
+            log.warning("Бюджет времени исчерпан: объём за 30 дней собран для %d из %d пулов, у остальных — за 24 часа",
+                        done, len(pick))
+            stopped = True
+            break
+        if i % 25 == 0:
+            log.info("Объём за 30 дней: %d из %d пулов (отказов по лимиту: %d)", i, len(pick), http.rate_limited)
         try:
             vols = gt_daily_volumes(http, r["net"], r["addr"])
         except Exception as e:  # noqa: BLE001
@@ -402,7 +423,7 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict) -> tuple[list[dict], di
         pr = r.pop("_pr")
         out.append(finish(r, pr))
     return out, {"status": "ok" if out else "empty", "count": len(out), "with30d": done,
-                 "networks": [c for c, _ in nets]}
+                 "networks": [c for c, _ in nets], "partial": stopped, "rateLimited": http.rate_limited}
 
 
 # ---------------------------------------------------------------- сборка
@@ -462,7 +483,8 @@ def main() -> int:
 
     if not args.skip_gt:
         try:
-            gt, sources["geckoterminal"] = collect_gt(http, clf, cfg)
+            budget = cfg.get("budget_minutes", 20) * 60
+            gt, sources["geckoterminal"] = collect_gt(http, clf, cfg, started + budget)
             keys = {dedupe_key(r) for r in gt}
             for r in pools:  # тот же пул из DefiLlama прячем в «Парах», но оставляем в «Наградах»
                 if r["src"] == "llama" and r["cat"] == "dex" and dedupe_key(r) in keys:
