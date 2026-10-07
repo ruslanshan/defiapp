@@ -61,9 +61,33 @@
   function applyCapital(pools, capital) {
     for (const p of pools) {
       p.m = personal(p, capital);
+      p.ex = exitInfo(p, capital);
       p.ra = effApy(p, p.m) * RISK_MULT[p.tier] * liqMult(p.tvl);
     }
     return pools;
+  }
+
+  /*
+   * Можно ли забрать деньги в любой момент.
+   * instant — сразу; pool (лендинг) — сразу, если свободной ликвидности хватает с большим запасом
+   * (в 20 раз больше капитала и не меньше $1 млн) и рынок не перегружен заёмщиками (загрузка < 95%).
+   */
+  const UTIL_WARN = 0.9, UTIL_BLOCK = 0.95, FREE_MULT = 20, FREE_MIN = 1e6;
+  function exitInfo(p, capital) {
+    const t = p.exit || "unknown";
+    if (t === "instant") return { ok: true, label: "Вывод сразу" };
+    if (t === "pool") {
+      const free = p.free != null ? p.free : p.tvl;
+      const need = Math.max(FREE_MULT * capital, FREE_MIN);
+      if (p.util != null && p.util >= UTIL_BLOCK) return { ok: false, label: "Рынок перегружен", warn: true, free };
+      if (free < need) return { ok: false, label: "Мало свободной ликвидности", warn: true, free };
+      return { ok: true, label: "Вывод сразу", warn: p.util != null && p.util >= UTIL_WARN, free };
+    }
+    if (t === "cooldown") return { ok: false, label: `Вывод через ${p.exitDays || "?"} дн.` };
+    if (t === "lock") return { ok: false, label: `Блокировка ${p.exitDays || "?"} дн.` };
+    if (t === "queue") return { ok: false, label: "Вывод через очередь" };
+    if (t === "market") return { ok: false, label: "Выход по рынку" };
+    return { ok: false, label: "Условия вывода неизвестны" };
   }
 
   function stableKind(cat) { return STABLE_KIND[cat] || "strategy"; }
@@ -74,6 +98,7 @@
       if (p.tvl < s.minTvl) return false;
       if (s.chain !== "all" && p.chain !== s.chain) return false;
       if (!s.showOutliers && (p.outlier || (p.apy || 0) > cap)) return false;
+      if (s.exitNow && !(p.ex && p.ex.ok)) return false;
       const assets = p.assets || [];
       if (s.tab === "stables") {
         return p.kind === "stable" && !p.dup && (s.stableKind === "all" || stableKind(p.cat) === s.stableKind);
@@ -106,7 +131,8 @@
     voltvl: (a, b) => (b.m.volTvl ?? -1) - (a.m.volTvl ?? -1),
     tvl: (a, b) => b.tvl - a.tvl,
     tier: (a, b) => a.tier - b.tier || b.ra - a.ra,
-    rew: (a, b) => (b.rew || 0) - (a.rew || 0)
+    rew: (a, b) => (b.rew || 0) - (a.rew || 0),
+    free: (a, b) => ((b.ex && b.ex.free) ?? -1) - ((a.ex && a.ex.free) ?? -1)
   };
   function sortPools(list, key) { return list.slice().sort(SORTS[key] || SORTS.ra); }
 
@@ -117,7 +143,7 @@
   }
 
   root.DYCore = {
-    personal, applyCapital, filterPools, ladder, sortPools, chainList, liqMult, stableKind, hasFees,
+    personal, applyCapital, exitInfo, filterPools, ladder, sortPools, chainList, liqMult, stableKind, hasFees,
     catLabel: c => CAT_LABEL[c] || "Прочее",
     tierName: t => TIER_NAME[t] || "?",
     RISK_MULT, APY_CAP, DILUTION_WARN

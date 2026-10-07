@@ -125,6 +125,14 @@ button { background: none; border: 0; padding: 0; cursor: pointer; text-align: l
 .you .apr b { color: var(--btn); }
 .rw { margin: 6px 0 0; font-size: 12.5px; }
 .rw b { font-weight: 600; }
+.rsub .ex-ok { color: var(--t1); font-weight: 500; }
+.rsub .ex-no { color: var(--t2); font-weight: 500; }
+.grid td.ex-ok { color: var(--t1); font-weight: 500; }
+.grid td.ex-no { color: var(--t2); font-weight: 500; }
+.exit { padding: 12px 14px; border-radius: 12px; margin: 0 0 12px; box-shadow: inset 3px 0 0 var(--tc); background: color-mix(in srgb, var(--tc) 9%, var(--bg)); }
+.exit b { display: block; font-size: 15px; }
+.exit p { margin: 4px 0 0; font-size: 14px; }
+.exit .hint { font-size: 13px; }
 .more { display: block; width: calc(100% - 2 * var(--pad)); margin: 14px var(--pad); padding: 11px; text-align: center; border-radius: 10px; background: var(--bg2); font-weight: 500; }
 .empty { padding: 26px var(--pad); }
 .empty p { margin: 0 0 4px; }
@@ -251,7 +259,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
   const PAGE = 40;
   const SORTS = {
     pairs: [["ra", "С поправкой на риск"], ["apr", "По APR"], ["month", "По доходу в месяц"], ["voltvl", "По объёму / TVL"], ["tvl", "По TVL"], ["tier", "Сначала надёжные"]],
-    stables: [["ra", "С поправкой на риск"], ["apr", "По APR"], ["month", "По доходу в месяц"], ["tvl", "По TVL"], ["tier", "Сначала надёжные"]],
+    stables: [["ra", "С поправкой на риск"], ["apr", "По APR"], ["month", "По доходу в месяц"], ["free", "По свободной ликвидности"], ["tvl", "По TVL"], ["tier", "Сначала надёжные"]],
     rewards: [["rew", "По APR наград"], ["ra", "С поправкой на риск"], ["apr", "По общему APR"], ["month", "По доходу в месяц"], ["tvl", "По TVL"]]
   };
 
@@ -259,7 +267,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     tab: "pairs", capital: 6000, profile: 2, minTvl: 1e5, chain: "all",
     sort: { pairs: "ra", stables: "ra", rewards: "rew" },
     view: { pairs: "table", stables: "list", rewards: "list" },
-    stableKind: "all", asset: "all", quote: "all", pairKind: "all", rewardKind: "all", showOutliers: false,
+    stableKind: "all", asset: "all", quote: "all", pairKind: "all", rewardKind: "all", showOutliers: false, exitNow: false,
     limit: PAGE, data: null, pools: [], byId: new Map(), loading: true, error: null, sheetPool: null, animateLadder: true
   };
 
@@ -383,14 +391,15 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     }
     const tvlOpts = [[1e4, "TVL от $10 тыс"], [1e5, "TVL от $100 тыс"], [1e6, "TVL от $1 млн"], [1e7, "TVL от $10 млн"], [5e7, "TVL от $50 млн"], [1e8, "TVL от $100 млн"]];
     const outliers = `<button class="chip toggle" data-toggle="showOutliers" aria-pressed="${state.showOutliers}">Выбросы</button>`;
+    const exitNow = `<button class="chip" data-toggle="exitNow" aria-pressed="${state.exitNow}">Вывод в любой момент</button>`;
     let sub = "";
     if (tab === "stables") {
-      sub = chips("stableKind", [["all", "Все типы"], ["lending", "Лендинг"], ["savings", "Сбережения"], ["lp", "LP стейбл-стейбл"], ["strategy", "Стратегии"]], outliers);
+      sub = chips("stableKind", [["all", "Все типы"], ["lending", "Лендинг"], ["savings", "Сбережения"], ["lp", "LP стейбл-стейбл"], ["strategy", "Стратегии"]], exitNow + outliers);
     } else if (tab === "pairs") {
       sub = chips("quote", [["all", "Все пары"], ["stable", "Со стейблом"], ["major", "С ETH или BTC"], ["alt", "Альт-альт"]]) +
         chips("pairKind", [["all", "Все типы"], ["dex", "DEX LP"], ["perp", "Перп-LP (GMX)"]], outliers);
     } else {
-      sub = chips("rewardKind", [["all", "Все"], ["stable", "Стейблкоины"], ["pair", "Пары"], ["single", "Один актив"]], outliers);
+      sub = chips("rewardKind", [["all", "Все"], ["stable", "Стейблкоины"], ["pair", "Пары"], ["single", "Один актив"]], exitNow + outliers);
     }
     box.innerHTML = `
       <div class="capital">
@@ -460,6 +469,11 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     return `<div class="rw">Награды <b>${esc(toks)}</b>: ${fmtPct(p.rew)} годовых, ${fmtCash(p.m.monthRew)} в месяц</div>`;
   }
 
+  function exitSpan(p) {
+    const util = p.util != null ? `, загрузка ${NF0.format(p.util * 100)}%` : "";
+    return `<span class="${p.ex.ok ? "ex-ok" : "ex-no"}">${esc(p.ex.label)}${p.exit === "pool" ? util : ""}</span>`;
+  }
+
   function rowHTML(p) {
     const sub = [`<span>${esc(p.chain)}</span>`];
     if (p.fee != null) sub.push(`<span>комиссия ${fmtFee(p.fee)}</span>`);
@@ -467,6 +481,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     if (p.m.volTvl != null) sub.push(`<span>объём/TVL ${fmtRatio(p.m.volTvl)}</span>`);
     else sub.push(`<span>${esc(C.catLabel(p.cat))}</span>`);
     if (p.meta) sub.push(`<span>${esc(p.meta)}</span>`);
+    if (state.tab !== "pairs") sub.push(exitSpan(p));
     if (p.m.share > C.DILUTION_WARN) sub.push(`<span class="warn">твой взнос — ${fmtShare(p.m.share)} пула</span>`);
     return `<button class="row" data-id="${esc(p.id)}">
       <span class="r-top"><span class="badge t${p.tier}" title="Итоговый риск">T${p.tier}</span>
@@ -499,12 +514,14 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     if (state.tab === "pairs") return [pool, chain, proto,
       { label: "Уровень комиссии", td: p => fmtFee(p.fee) }, tvl,
       { label: "Объём 30 дней", td: p => fmtUsd(p.v30) }, v1d, volTvl, feesDay, ...you];
+    const exitCol = { label: "Вывод", cls: "l", tdCls: p => p.ex.ok ? "ex-ok" : "ex-no", td: p => esc(p.ex.label) };
+    const freeCol = { label: "Свободно для вывода", sort: "free", td: p => p.exit === "pool" ? fmtUsd(p.ex.free) : "—" };
+    const utilCol = { label: "Загрузка рынка", td: p => p.util != null ? NF0.format(p.util * 100) + "%" : "—" };
     if (state.tab === "stables") return [pool, chain, proto,
-      { label: "Тип", cls: "l", td: p => esc(C.catLabel(p.cat)) }, tvl,
-      { label: "APY база", td: p => fmtPct(p.base) }, { label: "APY награды", sort: "rew", td: p => p.rew ? fmtPct(p.rew) : "—" },
-      { label: "Уровень комиссии", td: p => fmtFee(p.fee) }, volTvl, ...you];
+      { label: "Тип", cls: "l", td: p => esc(C.catLabel(p.cat)) }, exitCol, freeCol, utilCol, tvl,
+      { label: "APY база", td: p => fmtPct(p.base) }, { label: "APY награды", sort: "rew", td: p => p.rew ? fmtPct(p.rew) : "—" }, ...you];
     return [pool, chain, proto,
-      { label: "Токены наград", cls: "l", td: p => esc(p.rt.join(", ") || "—") }, tvl,
+      { label: "Токены наград", cls: "l", td: p => esc(p.rt.join(", ") || "—") }, exitCol, tvl,
       { label: "APY база", td: p => fmtPct(p.base) }, { label: "APR наград", sort: "rew", td: p => fmtPct(p.rew) },
       { label: "Награды в месяц", td: p => fmtCash(p.m.monthRew) }, ...you];
   }
@@ -513,7 +530,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     const cols = columns();
     const cur = state.sort[state.tab];
     const head = cols.map(c => `<th class="${c.cls || ""}"${c.sort ? ` data-sort="${c.sort}"` : ""}${c.sort === cur ? ' aria-sort="descending"' : ""}>${esc(c.label)}</th>`).join("");
-    const body = rows.map(p => `<tr data-id="${esc(p.id)}" tabindex="0">${cols.map(c => `<td class="${c.cls || ""}">${c.td(p)}</td>`).join("")}</tr>`).join("");
+    const body = rows.map(p => `<tr data-id="${esc(p.id)}" tabindex="0">${cols.map(c => `<td class="${c.cls || ""} ${c.tdCls ? c.tdCls(p) : ""}">${c.td(p)}</td>`).join("")}</tr>`).join("");
     return `<div class="tablewrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   }
 
@@ -592,6 +609,15 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
 
       ${[1, 2, 3].map(t => `<div class="tierhead"><span class="badge big t${t}">T${t}</span><h3>${tierTitle[t]}</h3></div>${protoList(t)}`).join("")}
 
+      <h3>Можно ли вывести в любой момент</h3>
+      <p>Фильтр «Вывод в любой момент» на вкладках «Стейблы» и «Награды» оставляет только то, откуда деньги можно забрать сразу:</p>
+      <dl class="formulas">
+        <dt>DEX-пулы, сбережения</dt><dd>sUSDS, sDAI и ликвидность из DEX выводятся без ожидания</dd>
+        <dt>Лендинг</dt><dd>свободной ликвидности (внесено минус занято) не меньше чем в 20 раз больше вашего капитала и не меньше $1 млн, загрузка рынка ниже 95%</dd>
+        <dt>Не проходят</dt><dd>кулдаун (sUSDe — до 7 дней), блокировка (HLP — 4 дня), очередь (Maple), выход по рынку (PT Pendle), неизвестные условия</dd>
+      </dl>
+      <p>Почему загрузка важна: если почти всё внесённое занято заёмщиками, вывести можно только то, что свободно. В апреле 2026 года после взлома моста Kelp рынки стейблкоинов на Aave упёрлись в 100% загрузки, и вкладчики не могли забрать деньги, пока займы не погасили.</p>
+
       <h3>Монеты в парах</h3>
       <p class="hint">Топ-30 по капитализации без стейблкоинов и обёрток обновляется при каждой сборке. ETH, BTC и их основные обёртки, а также LINK, UNI и AAVE — T1; остальные монеты топ-30 — T2 (риск мостов и ликвидности); рестейкинг-токены и непроверенные токены — T3.</p>
       ${tags(uniT1, 1)}${tags(uniT2, 2)}
@@ -642,6 +668,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
         fact("Тип", esc(C.catLabel(p.cat))), fact("С поправкой на риск", fmtPct(p.ra)));
     }
     parts.push(`<dl class="facts">${f.join("")}</dl>`);
+    if (state.tab !== "pairs" || p.exit !== "instant") parts.push(exitBlock(p));
     parts.push(`<div class="risk"><div class="risk-top"><span class="badge big t${p.tier}">T${p.tier}</span>
         <div><b>Итоговый риск ${esc(C.tierName(p.tier))}</b><div class="hint">Берётся худший из трёх уровней</div></div></div>
       <div class="risk-grid">${riskCell("Протокол", p.pt)}${riskCell("Активы", p.at)}${riskCell("Сеть", p.ct)}</div>
@@ -655,6 +682,21 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     if (p.purl && p.purl !== p.url) acts.push(`<button class="btn ghost" data-action="open-url" data-url="${esc(p.purl)}">Перейти на сайт ${esc(p.pn)}</button>`);
     parts.push(`<div class="actions">${acts.join("")}</div>`);
     return parts.join("");
+  }
+
+  function exitBlock(p) {
+    const pr = T.protocols.find(x => x.id === p.proto);
+    const text = (pr && pr.exit && pr.exit.text) || (T.exit_texts || {})[p.exit || "unknown"] || "";
+    const lines = [];
+    if (p.exit === "pool") {
+      const free = p.ex.free;
+      const times = free / state.capital;
+      lines.push(`Свободно для вывода ${fmtUsd(free)}${times >= 1 ? ` — в ${times >= 1000 ? NF0.format(Math.round(times / 100) * 100) : NF0.format(times)} раз больше вашего капитала` : " — меньше вашего капитала"}.`);
+      if (p.util != null) lines.push(`Загрузка рынка ${NF0.format(p.util * 100)}%: столько внесённого сейчас занято заёмщиками.${p.util >= 0.95 ? " Почти всё занято — вывод может встать." : p.util >= 0.9 ? " Высокая — при панике свободная ликвидность быстро кончается." : ""}`);
+      else lines.push("Данных о загрузке рынка нет — свободная ликвидность взята из TVL по методике DefiLlama.");
+    }
+    return `<div class="exit t${p.ex.ok ? (p.ex.warn ? 2 : 1) : (p.ex.warn ? 3 : 2)}"><b>${esc(p.ex.label)}</b><p>${esc(text)}</p>
+      ${lines.map(l => `<p class="hint">${esc(l)}</p>`).join("")}</div>`;
   }
 
   function volumeChart(p) {
