@@ -31,6 +31,7 @@ HERE = Path(__file__).resolve().parent
 log = logging.getLogger("collector")
 
 LLAMA_POOLS = "https://yields.llama.fi/pools"
+LLAMA_LENDBORROW = "https://yields.llama.fi/lendBorrow"  # внесено и занято по лендинг-рынкам
 LLAMA_COINS = "https://coins.llama.fi/prices/current/"
 CG_MARKETS = "https://api.coingecko.com/api/v3/coins/markets"
 GT_API = "https://api.geckoterminal.com/api/v2"
@@ -225,6 +226,15 @@ def finish(rec: dict, pr) -> dict:
         flags.append("smalltvl")
     rec["flags"] = list(dict.fromkeys(flags))
     rec["tier"] = max(rec["pt"], rec["at"], rec["ct"])
+    ex = (pr or {}).get("exit") or {}
+    if ex:
+        rec["exit"] = ex["type"]
+        if ex.get("days"):
+            rec["exitDays"] = ex["days"]
+    elif pr or rec["cat"] == "dex":  # ликвидность из DEX-пула забирается без разрешения протокола
+        rec["exit"] = S.tiers().get("exit_defaults", {}).get(rec["cat"], "unknown")
+    else:
+        rec["exit"] = "unknown"
     return rec
 
 
@@ -235,8 +245,25 @@ def dedupe_key(rec: dict) -> str:
 
 # ---------------------------------------------------------------- DefiLlama
 
+def load_lend_borrow(http: Http) -> dict:
+    """Внесено и занято по лендинг-рынкам DefiLlama: pool → (supply, borrow)."""
+    try:
+        rows = http.get(LLAMA_LENDBORROW, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        log.warning("lendBorrow DefiLlama недоступен (%s) — загрузку рынков не покажу", e)
+        return {}
+    out = {}
+    for r in rows if isinstance(rows, list) else []:
+        sup, bor = num(r.get("totalSupplyUsd")), num(r.get("totalBorrowUsd"))
+        if r.get("pool") and sup and sup > 0 and bor is not None and 0 <= bor <= sup * 1.05:
+            out[r["pool"]] = (sup, min(bor, sup))
+    log.info("lendBorrow: данные о займах для %d рынков", len(out))
+    return out
+
+
 def collect_llama(http: Http, clf: S.Classifier, cfg: dict) -> list[dict]:
     data = http.get(LLAMA_POOLS, timeout=180).get("data") or []
+    lend = load_lend_borrow(http)
     floor, out = cfg["min_tvl_llama"], []
     for p in data:
         tvl, apy = num(p.get("tvlUsd")), num(p.get("apy"))
@@ -273,6 +300,14 @@ def collect_llama(http: Http, clf: S.Classifier, cfg: dict) -> list[dict]:
             "outlier": bool(p.get("outlier")), "url": f"https://defillama.com/yields/pool/{p['pool']}",
             "purl": pr.get("url") if pr else None, "_flags": info["flags"],
         }
+        if rec["cat"] == "lending":
+            # По методике DefiLlama TVL лендинга = внесено − занято, то есть свободная ликвидность.
+            # Если есть данные о займах, TVL = всего внесено (от него считается доля), free = свободно.
+            lb = lend.get(rec["id"])
+            if lb:
+                rec["tvl"], rec["free"], rec["util"] = lb[0], lb[0] - lb[1], round(lb[1] / lb[0], 4)
+            else:
+                rec["free"] = tvl
         if rec["cat"] == "dex" and rec["fee"] and rec["kind"] in ("pair", "stable"):
             v7 = rec.pop("_v7", None)
             if v7:
@@ -538,7 +573,7 @@ def load_previous(src: str | None) -> dict:
         return {}
 
 
-ROUND = {"tvl": 0, "v24": 0, "v1d": 0, "v30": 0, "apy": 4, "base": 4, "rew": 4, "m30": 4}
+ROUND = {"tvl": 0, "free": 0, "v24": 0, "v1d": 0, "v30": 0, "apy": 4, "base": 4, "rew": 4, "m30": 4}
 
 
 def compact(rec: dict) -> dict:
