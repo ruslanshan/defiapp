@@ -46,6 +46,9 @@ LLAMA_CHAIN_KEYS = {
     "zkSync Era": "era", "Hyperliquid L1": "hyperliquid", "Unichain": "unichain", "Sonic": "sonic",
     "Linea": "linea", "Scroll": "scroll", "Mantle": "mantle", "Berachain": "berachain", "Plasma": "plasma",
 }
+# Одна сеть в разных источниках называется по-разному — приводим к одному имени
+CHAIN_ALIASES = {"OP Mainnet": "Optimism", "xDai": "Gnosis", "Hyperliquid": "Hyperliquid L1",
+                 "Robinhood Chain": "Robinhood", "Binance": "BSC", "Avax": "Avalanche"}
 ADDRESS_RE = re.compile(r"^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$")
 
 
@@ -240,6 +243,7 @@ def collect_llama(http: Http, clf: S.Classifier, cfg: dict) -> list[dict]:
         if not p.get("pool") or tvl is None or tvl < floor or apy is None or apy <= 0:
             continue
         chain = str(p.get("chain") or "")
+        chain = CHAIN_ALIASES.get(chain, chain)
         raw = S.split_symbol(p.get("symbol"))
         if not raw or len(raw) > 2:
             continue
