@@ -15,7 +15,7 @@
 (typeof window !== "undefined" ? window : globalThis).TIERS =
 /*JSON-START*/
 {
-  "version": "2026-10-07c",
+  "version": "2026-10-07d",
   "protocols": [
     {
       "id": "aave-v3",
@@ -365,9 +365,10 @@
       "url": "https://aerodrome.finance",
       "flags": [
         "il",
-        "emissions"
+        "ve33"
       ],
-      "why": "Главный DEX сети Base (форк Velodrome). Основная часть APY — эмиссия AERO, её цена плавает."
+      "why": "Главный DEX сети Base (форк Velodrome). Основная часть APY — эмиссия AERO, её цена плавает.",
+      "fee_model": "ve33"
     },
     {
       "id": "velodrome",
@@ -376,17 +377,18 @@
       "cat": "dex",
       "since": "2022",
       "aliases": [
-        "velodrome-v2",
-        "velodrome-v3",
         "velodrome-slipstream",
+        "velodrome-v3",
+        "velodrome-v2",
         "velodrome"
       ],
       "url": "https://velodrome.finance",
       "flags": [
         "il",
-        "emissions"
+        "ve33"
       ],
-      "why": "Главный DEX Optimism. Основная часть APY — эмиссия VELO."
+      "why": "Главный DEX Optimism. Основная часть APY — эмиссия VELO.",
+      "fee_model": "ve33"
     },
     {
       "id": "pancakeswap",
@@ -978,6 +980,10 @@
     "unverified": {
       "level": 3,
       "text": "Токен в пуле не сопоставлен с CoinGecko — сверьте адрес контракта, это может быть подделка."
+    },
+    "ve33": {
+      "level": 2,
+      "text": "Модель ve(3,3): если застейкать позицию, доход — эмиссия AERO, а комиссии уходят голосующим veAERO; без стейкинга — только комиссии, и они динамические (бывают в разы ниже номинала). Поэтому здесь показан APR от DefiLlama, а не расчёт по формуле таблицы. Пулы с пометкой MIGRATING на сайте Aerodrome переносятся в Slipstream V3 — новые позиции открывайте в новой версии пула."
     }
   },
   "exit_defaults": {
