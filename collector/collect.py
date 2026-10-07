@@ -20,7 +20,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -34,6 +34,7 @@ LLAMA_POOLS = "https://yields.llama.fi/pools"
 LLAMA_COINS = "https://coins.llama.fi/prices/current/"
 CG_MARKETS = "https://api.coingecko.com/api/v3/coins/markets"
 GT_API = "https://api.geckoterminal.com/api/v2"
+CG_ONCHAIN = "https://api.coingecko.com/api/v3/onchain"  # те же данные GeckoTerminal по Demo-ключу
 HL_INFO = "https://api.hyperliquid.xyz/info"
 HLP_ADDR = "0xdfc24b077bc1425ad1dea75bcb6f8158e10df303"
 CAPITAL_DEFAULT = 6000
@@ -61,33 +62,50 @@ def pretty(slug: str) -> str:
     return " ".join(w.upper() if re.fullmatch(r"v\d", w, re.I) else w[:1].upper() + w[1:] for w in words if w)
 
 
+class RateLimited(RuntimeError):
+    """Источник отказывает по лимиту запросов (HTTP 429)."""
+
+
 class Http:
-    def __init__(self, gt_rpm: int):
+    def __init__(self, gt_rpm: int, cg_key: str | None = None, cg_left: int = 0):
         self.s = requests.Session()
-        self.s.headers["User-Agent"] = "defiapp-collector/2.0"
+        self.s.headers["User-Agent"] = "defiapp-collector/2.1"
         self.gt_gap = 60.0 / max(1, gt_rpm)
         self._last_gt = 0.0
+        self._last_cg = 0.0
         self.calls = 0
         self.rate_limited = 0
+        self.cg_key = cg_key
+        self.cg_left = cg_left if cg_key else 0   # сколько запросов по ключу ещё можно сделать сегодня
+        self.cg_used = 0
+        self.keyless_streak = 0                   # подряд отказов GeckoTerminal без ключа
+        self.keyless_off = False
 
     def get(self, url, params=None, headers=None, timeout=60, retries=4, backoff=20):
+        last = None
         for attempt in range(retries):
             self.calls += 1
             try:
                 r = self.s.get(url, params=params, headers=headers, timeout=timeout)
             except (requests.ConnectionError, requests.Timeout) as e:
                 log.warning("%s: %s", url, e)
-                time.sleep(5 * (attempt + 1))
+                last = e
+                if attempt < retries - 1:
+                    time.sleep(5 * (attempt + 1))
                 continue
             if r.status_code == 429 or r.status_code >= 500:
                 self.rate_limited += r.status_code == 429
-                wait = _retry_after(r) or backoff * (attempt + 1)
-                log.warning("%s → %s, пауза %s с", url, r.status_code, wait)
-                time.sleep(wait)
+                last = r.status_code
+                if attempt < retries - 1:
+                    wait = _retry_after(r) or backoff * (attempt + 1)
+                    log.warning("%s → %s, пауза %s с", url, r.status_code, wait)
+                    time.sleep(wait)
                 continue
             r.raise_for_status()
             return r.json()
-        raise RuntimeError(f"{url}: нет ответа после {retries} попыток")
+        if last == 429:
+            raise RateLimited(f"{url}: отказ по лимиту запросов")
+        raise RuntimeError(f"{url}: нет ответа после {retries} попыток ({last})")
 
     def post(self, url, payload, timeout=30):
         self.calls += 1
@@ -95,20 +113,43 @@ class Http:
         r.raise_for_status()
         return r.json()
 
+    @property
+    def gt_blocked(self) -> bool:
+        return self.keyless_off and self.cg_left <= 0
+
     def gt(self, path, params=None):
-        """GeckoTerminal: бесплатный лимит 30 запросов в минуту — держим паузу между вызовами.
-        На серверах GitHub лимит делят с чужими проектами, поэтому после отказа (429) замедляемся."""
-        wait = self._last_gt + self.gt_gap - time.time()
+        """Данные GeckoTerminal. Сначала бесплатный API без ключа (лимит делят все проекты на серверах
+        GitHub), при отказе — тот же запрос через CoinGecko Demo API по ключу COINGECKO_API_KEY."""
+        if not self.keyless_off:
+            wait = self._last_gt + self.gt_gap - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_gt = time.time()
+            try:
+                data = self.get(GT_API + path, params=params, headers={"Accept": "application/json;version=20230302"},
+                                retries=1 if self.cg_left > 0 else 3, backoff=15)
+                self.keyless_streak = 0
+                return data
+            except RateLimited:
+                self.keyless_streak += 1
+                self.gt_gap = min(self.gt_gap * 1.5, 12.0)
+                if self.keyless_streak >= 3:
+                    self.keyless_off = True
+                    log.warning("GeckoTerminal без ключа ограничил запросы%s",
+                                " — дальше через CoinGecko Demo API" if self.cg_left > 0
+                                else ", а ключа COINGECKO_API_KEY нет — остальное дособеру в следующий запуск")
+                if self.cg_left <= 0:
+                    raise
+        if self.cg_left <= 0:
+            raise RateLimited("лимит запросов исчерпан")
+        wait = self._last_cg + 2.2 - time.time()  # Demo-ключ: до 30 запросов в минуту
         if wait > 0:
             time.sleep(wait)
-        self._last_gt = time.time()
-        before = self.rate_limited
-        try:
-            return self.get(GT_API + path, params=params, headers={"Accept": "application/json;version=20230302"},
-                            retries=3, backoff=15)
-        finally:
-            if self.rate_limited > before:
-                self.gt_gap = min(self.gt_gap * 1.5, 12.0)
+        self._last_cg = time.time()
+        self.cg_left -= 1
+        self.cg_used += 1
+        return self.get(CG_ONCHAIN + path, params=params, headers={"x-cg-demo-api-key": self.cg_key},
+                        retries=2, backoff=15)
 
 
 def _retry_after(r):
@@ -121,8 +162,11 @@ def _retry_after(r):
 # ---------------------------------------------------------------- топ-30
 
 def build_universe(http: Http, size: int):
-    key = os.environ.get("COINGECKO_API_KEY")
+    key = http.cg_key
     headers = {"x-cg-demo-api-key": key} if key else None
+    if key:
+        http.cg_used += 1
+        http.cg_left -= 1
     try:
         rows = http.get(CG_MARKETS, params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 150, "page": 1},
                         headers=headers, retries=2)
@@ -164,8 +208,11 @@ def finish(rec: dict, pr) -> dict:
     m30 = rec.get("m30")
     if rec["src"] == "llama" and m30 and rec["apy"] > 2 * m30 and rec["apy"] - m30 > 2:
         flags.append("spike")
+    if rec["src"] == "llama" and rec.get("vsrc"):
+        flags.append("vol7" if rec["vsrc"] == "7d" else "vol24")
     if rec["src"] == "gt":
         if rec.get("v30") is None:
+            rec["vsrc"] = "24h"
             flags.append("vol24")
         elif rec["vdays"] < 30:
             flags.append("young")
@@ -215,13 +262,20 @@ def collect_llama(http: Http, clf: S.Classifier, cfg: dict) -> list[dict]:
             "keytoks": [t.get("base", t["sym"]) for t in toks],
             "fee": S.parse_fee(meta), "tvl": tvl, "apy": apy, "base": num(p.get("apyBase")), "rew": rew or None,
             "m30": num(p.get("apyMean30d")), "v24": num(p.get("volumeUsd1d")), "v1d": None, "v30": None,
-            "vdays": None, "vh": None, "age": None,
+            "vdays": None, "vh": None, "age": None, "_v7": num(p.get("volumeUsd7d")),
             "rtRaw": [t for t in (p.get("rewardTokens") or []) if isinstance(t, str)], "rt": [],
             "pt": prot["pt"], "at": info["at"], "ct": S.chain_tier(chain),
             "cat": pr["cat"] if pr else ("dex" if p.get("exposure") == "multi" else "vault"),
             "outlier": bool(p.get("outlier")), "url": f"https://defillama.com/yields/pool/{p['pool']}",
             "purl": pr.get("url") if pr else None, "_flags": info["flags"],
         }
+        if rec["cat"] == "dex" and rec["fee"] and rec["kind"] in ("pair", "stable"):
+            v7 = rec.pop("_v7", None)
+            if v7:
+                rec["v1d"], rec["vsrc"] = v7 / 7, "7d"
+            elif rec["v24"]:
+                rec["v1d"], rec["vsrc"] = rec["v24"], "24h"
+        rec.pop("_v7", None)
         out.append(finish(rec, pr))
     return out
 
@@ -331,7 +385,11 @@ def gt_record(d: dict, inc: dict, chain: str, net: str, clf: S.Classifier, cfg: 
         return None
     dex_id = ((rel.get("dex") or {}).get("data") or {}).get("id") or ""
     name = str(a.get("name") or "")
-    prot = S.protocol_info(dex_id, name)
+    lookup = dex_id
+    norm = dex_id.lower().replace("_", "-")
+    if norm.startswith("uniswap") and not re.match(r"uniswap-v[234]", norm):
+        lookup = "uniswap-v3" if S.parse_fee(name) else "uniswap-v2"  # например, uniswap-bsc — это V3
+    prot = S.protocol_info(lookup, name)
     pr = prot["pr"]
     fee = S.parse_fee(name) or (pr or {}).get("fee_default")
     if not fee:
@@ -363,10 +421,11 @@ def gt_daily_volumes(http: Http, net: str, addr: str) -> list[float]:
     return [num(r[5]) or 0.0 for r in full]
 
 
-def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float) -> tuple[list[dict], dict]:
+def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float, cache: dict) -> tuple[list[dict], dict]:
     nets = resolve_networks(http, cfg)
     by_id: dict[str, dict] = {}
     stopped = False
+    failed: set[str] = set()
     for chain, net in nets:
         for page in range(1, cfg["gt_pages_per_network"] + 1):
             if time.time() > deadline:
@@ -377,6 +436,8 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float) -> tup
                             {"page": page, "sort": "h24_volume_usd_desc", "include": "base_token,quote_token,dex"})
             except Exception as e:  # noqa: BLE001
                 log.warning("GeckoTerminal %s, стр. %s: %s", net, page, e)
+                if page == 1:
+                    failed.add(net)
                 break
             rows = j.get("data") or []
             if not rows:
@@ -389,30 +450,49 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float) -> tup
     recs = list(by_id.values())
     log.info("GeckoTerminal: %d подходящих пулов в %d сетях, отказов по лимиту: %d", len(recs), len(nets), http.rate_limited)
 
-    # Дневной объём за 30 дней — отдельный запрос на пул, поэтому только для самых интересных
+    # Дневной объём за 30 дней — отдельный запрос на пул. История меняется раз в сутки, поэтому берём её
+    # из прошлой выгрузки, если она уже включает вчерашний день, и запрашиваем только недостающее.
     n = cfg["ohlcv_pools"]
     top_vol = sorted(recs, key=lambda r: r["v24"], reverse=True)[: n // 2]
     top_apr = sorted(recs, key=lambda r: r["v24"] * r["fee"] / r["tvl"], reverse=True)
     pick = list({r["id"]: r for r in top_vol + top_apr}.values())[:n]
+    yday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    oldest_ok = (datetime.now(timezone.utc).date() - timedelta(days=4)).isoformat()
+    cached = fresh = 0
+    for r in recs:  # из кэша берём историю для всех пулов, не только для выбранных
+        c = cache.get(r["id"])
+        if c and c.get("vh") and str(c.get("vhd", "")) >= oldest_ok:
+            r["vh"], r["vhd"] = c["vh"], c["vhd"]
+            cached += 1
+            fresh += c["vhd"] >= yday
+    todo = [r for r in pick if r.get("vhd", "") < yday]
+    todo.sort(key=lambda r: "vh" in r)  # сначала пулы вообще без истории, потом устаревшие
+    log.info("Объём за 30 дней: %d пулов из прошлой выгрузки (свежих %d), запросить: %d", cached, fresh, len(todo))
     done = 0
-    for i, r in enumerate(pick, 1):
+    for i, r in enumerate(todo, 1):
         if time.time() > deadline:
-            log.warning("Бюджет времени исчерпан: объём за 30 дней собран для %d из %d пулов, у остальных — за 24 часа",
-                        done, len(pick))
+            log.warning("Бюджет времени исчерпан: запрошено %d из %d, остальное — в следующий запуск", done, len(todo))
+            stopped = True
+            break
+        if http.gt_blocked:
+            log.warning("Объём за 30 дней: запрошено %d из %d, остальное — в следующий запуск", done, len(todo))
             stopped = True
             break
         if i % 25 == 0:
-            log.info("Объём за 30 дней: %d из %d пулов (отказов по лимиту: %d)", i, len(pick), http.rate_limited)
+            log.info("Объём за 30 дней: %d из %d (отказов по лимиту: %d, запросов по ключу: %d)",
+                     i, len(todo), http.rate_limited, http.cg_used)
         try:
             vols = gt_daily_volumes(http, r["net"], r["addr"])
         except Exception as e:  # noqa: BLE001
             log.warning("OHLCV %s: %s", r["id"], e)
             continue
         if vols:
-            r["vh"] = [round(v) for v in vols]
-            r["vdays"] = len(vols)
-            r["v30"] = sum(vols)
+            r["vh"], r["vhd"] = [round(v) for v in vols], yday
             done += 1
+    for r in recs:
+        if r.get("vh"):
+            r["vdays"] = len(r["vh"])
+            r["v30"] = float(sum(r["vh"]))
 
     out = []
     for r in recs:
@@ -422,11 +502,37 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float) -> tup
         r["outlier"] = r["apy"] > 1000 or r["v1d"] / r["tvl"] > 100
         pr = r.pop("_pr")
         out.append(finish(r, pr))
-    return out, {"status": "ok" if out else "empty", "count": len(out), "with30d": done,
-                 "networks": [c for c, _ in nets], "partial": stopped, "rateLimited": http.rate_limited}
+    # Сеть не ответила вовсе — показываем её пулы из прошлой выгрузки, чтобы они не пропали с сайта
+    reused = [dict(p, stale=True) for p in cache.values() if p.get("net") in failed and p["id"] not in by_id]
+    if reused:
+        log.warning("Сети без ответа: %s — взял %d пулов из прошлой выгрузки", ", ".join(sorted(failed)), len(reused))
+    out += reused
+    with30 = sum(1 for r in out if r.get("v30") is not None)
+    return out, {"status": "ok" if out else "empty", "count": len(out), "with30d": with30, "fetched30d": done,
+                 "networks": [c for c, _ in nets], "partial": stopped, "rateLimited": http.rate_limited,
+                 "viaKey": http.cg_used}
 
 
 # ---------------------------------------------------------------- сборка
+
+def load_previous(src: str | None) -> dict:
+    """Прошлый data.json (с GitHub Pages или с диска). Нет файла — начинаем с нуля."""
+    if not src:
+        return {}
+    try:
+        if src.startswith("http"):
+            r = requests.get(src, params={"t": int(time.time())}, timeout=30)
+            if r.status_code != 200:
+                log.info("Прошлой выгрузки нет (%s) — объёмы за 30 дней собираю с нуля", r.status_code)
+                return {}
+            data = r.json()
+        else:
+            data = json.loads(Path(src).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        log.warning("Прошлая выгрузка не прочиталась (%s) — собираю с нуля", e)
+        return {}
+
 
 ROUND = {"tvl": 0, "v24": 0, "v1d": 0, "v30": 0, "apy": 4, "base": 4, "rew": 4, "m30": 4}
 
@@ -434,7 +540,7 @@ ROUND = {"tvl": 0, "v24": 0, "v1d": 0, "v30": 0, "apy": 4, "base": 4, "rew": 4, 
 def compact(rec: dict) -> dict:
     out = {}
     for k, v in rec.items():
-        if k.startswith("_") or k in ("keytoks", "addr") or v is None or v == [] or v == "" or v is False:
+        if k.startswith("_") or k == "addr" or v is None or v == [] or v == "" or v is False:
             continue
         if k in ROUND and isinstance(v, float):
             v = round(v, ROUND[k]) if ROUND[k] else round(v)
@@ -448,13 +554,22 @@ def main() -> int:
     ap.add_argument("--config", default=str(HERE / "config.json"))
     ap.add_argument("--skip-gt", action="store_true", help="без GeckoTerminal (быстрая проверка)")
     ap.add_argument("--ohlcv", type=int, help="сколько пулов дополнить объёмом за 30 дней")
+    ap.add_argument("--prev", default=os.environ.get("PREV_DATA_URL"),
+                    help="адрес или путь прошлого data.json — из него берётся кэш объёмов за 30 дней")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     if args.ohlcv is not None:
         cfg["ohlcv_pools"] = args.ohlcv
     started = time.time()
-    http = Http(cfg["gt_requests_per_minute"])
+    prev = load_previous(args.prev)
+    today = datetime.now(timezone.utc).date().isoformat()
+    quota = prev.get("quota") or {}
+    used_today = quota.get("cg", 0) if quota.get("date") == today else 0
+    key = os.environ.get("COINGECKO_API_KEY") or None
+    http = Http(cfg["gt_requests_per_minute"], key, cfg.get("coingecko_daily_calls", 300) - used_today)
+    log.info("Ключ CoinGecko: %s", f"есть, сегодня осталось запросов: {http.cg_left}" if key else "нет")
+    cache = {p["id"]: p for p in prev.get("pools", []) if p.get("src") == "gt"}
     sources: dict[str, dict] = {}
 
     universe, sources["coingecko"] = build_universe(http, cfg["universe_size"])
@@ -484,8 +599,8 @@ def main() -> int:
     if not args.skip_gt:
         try:
             budget = cfg.get("budget_minutes", 20) * 60
-            gt, sources["geckoterminal"] = collect_gt(http, clf, cfg, started + budget)
-            keys = {dedupe_key(r) for r in gt}
+            gt, sources["geckoterminal"] = collect_gt(http, clf, cfg, started + budget, cache)
+            keys = {dedupe_key(r) for r in gt if r.get("keytoks")}
             for r in pools:  # тот же пул из DefiLlama прячем в «Парах», но оставляем в «Наградах»
                 if r["src"] == "llama" and r["cat"] == "dex" and dedupe_key(r) in keys:
                     r["dup"] = True
@@ -502,6 +617,7 @@ def main() -> int:
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tiersVersion": S.tiers()["version"], "capitalDefault": CAPITAL_DEFAULT,
         "sources": sources, "universe": universe, "pools": [compact(p) for p in pools],
+        "quota": {"date": today, "cg": used_today + http.cg_used},
     }
     out = Path(args.out)
     tmp = out.with_suffix(".tmp")

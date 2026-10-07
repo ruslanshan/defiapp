@@ -6,6 +6,7 @@
   "gt_requests_per_minute": 28,
   "ohlcv_pools": 200,
   "budget_minutes": 20,
+  "coingecko_daily_calls": 300,
   "networks": [
     {"chain": "Ethereum",  "gt": "eth"},
     {"chain": "Arbitrum",  "gt": "arbitrum"},
