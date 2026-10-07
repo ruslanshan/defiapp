@@ -1,0 +1,20 @@
+{
+  "universe_size": 30,
+  "min_tvl_dex": 10000,
+  "min_tvl_llama": 100000,
+  "gt_pages_per_network": 5,
+  "gt_requests_per_minute": 28,
+  "ohlcv_pools": 200,
+  "networks": [
+    {"chain": "Ethereum",  "gt": "eth"},
+    {"chain": "Arbitrum",  "gt": "arbitrum"},
+    {"chain": "Base",      "gt": "base"},
+    {"chain": "Optimism",  "gt": "optimism"},
+    {"chain": "Unichain",  "gt": "unichain"},
+    {"chain": "Polygon",   "gt": "polygon_pos"},
+    {"chain": "BSC",       "gt": "bsc"},
+    {"chain": "Avalanche", "gt": "avax"},
+    {"chain": "Solana",    "gt": "solana"},
+    {"chain": "Robinhood", "gt": "robinhood", "match": "robinhood"}
+  ]
+}

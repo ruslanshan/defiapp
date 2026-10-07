@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Yield Ladder — доходность DeFi</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap">
+<script src="tiers.js"></script>
+<script src="core.js"></script>
+<style>
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --bg2: var(--tg-theme-secondary-bg-color, #eef0f3);
+  --text: var(--tg-theme-text-color, #15191e);
+  --hint: var(--tg-theme-hint-color, #6c7480);
+  --link: var(--tg-theme-link-color, #2a6fdb);
+  --btn: var(--tg-theme-button-color, #2a6fdb);
+  --btn-text: var(--tg-theme-button-text-color, #ffffff);
+  --sep: color-mix(in srgb, var(--hint) 22%, transparent);
+  --hl: color-mix(in srgb, var(--btn) 11%, var(--bg));
+  --hl-strong: color-mix(in srgb, var(--btn) 22%, var(--bg));
+  --t1: #1d7a60; --t2: #94650c; --t3: #b03d2a;
+  --font: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --pad: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: var(--tg-theme-bg-color, #181a1e); --bg2: var(--tg-theme-secondary-bg-color, #22262c);
+    --text: var(--tg-theme-text-color, #eceef2); --hint: var(--tg-theme-hint-color, #8f96a1);
+    --link: var(--tg-theme-link-color, #74a9ff); --btn: var(--tg-theme-button-color, #3b82f6);
+    --t1: #5cc4a3; --t2: #e3b14d; --t3: #f27f69;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: var(--tg-theme-bg-color, #181a1e); --bg2: var(--tg-theme-secondary-bg-color, #22262c);
+  --text: var(--tg-theme-text-color, #eceef2); --hint: var(--tg-theme-hint-color, #8f96a1);
+  --link: var(--tg-theme-link-color, #74a9ff); --btn: var(--tg-theme-button-color, #3b82f6);
+  --t1: #5cc4a3; --t2: #e3b14d; --t3: #f27f69;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 400 15px/1.45 var(--font); -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px)); min-height: 100vh; }
+button, select, input { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 6px; }
+.hint { color: var(--hint); }
+.t1 { --tc: var(--t1); } .t2 { --tc: var(--t2); } .t3 { --tc: var(--t3); }
+
+.top { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--sep);
+  padding-top: max(env(safe-area-inset-top, 0px), calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px))); }
+.tabs { display: flex; gap: 18px; padding: 10px var(--pad) 0; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { padding: 6px 0 10px; font-weight: 600; color: var(--hint); white-space: nowrap; border-bottom: 2px solid transparent; }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--text); }
+
+/* Управление */
+.controls { padding: 12px var(--pad) 0; display: grid; gap: 8px; }
+.controls[hidden] { display: none; }
+.capital { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--hl); }
+.capital label { font-weight: 600; }
+.capital .field { display: flex; align-items: center; background: var(--bg); border-radius: 8px; padding: 0 10px; box-shadow: inset 0 0 0 1px var(--sep); }
+.capital input { width: 110px; border: 0; background: none; padding: 7px 0 7px 4px; font-weight: 600; font-size: 17px; outline: none; }
+.capital .hint { font-size: 12.5px; line-height: 1.3; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--bg2); border-radius: 10px; padding: 3px; }
+.seg button { text-align: center; padding: 7px 4px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--hint); }
+.seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--sep); }
+.seg .dots { display: inline-flex; gap: 3px; margin-right: 6px; vertical-align: 1px; }
+.seg .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--tc); display: block; }
+.selects { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.selects::-webkit-scrollbar { display: none; }
+.selects select { flex: none; appearance: none; -webkit-appearance: none; border: 0; background: var(--bg2); border-radius: 8px;
+  padding: 6px 26px 6px 10px; font-size: 13px; font-weight: 500; max-width: 60vw;
+  background-image: linear-gradient(45deg, transparent 50%, var(--hint) 50%), linear-gradient(135deg, var(--hint) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex: none; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 500; box-shadow: inset 0 0 0 1px var(--sep); color: var(--hint); }
+.chip[aria-pressed="true"] { background: var(--text); color: var(--bg); box-shadow: none; }
+.chip.toggle[aria-pressed="true"] { background: var(--t3); color: #fff; }
+
+/* Лестница риска */
+.ladder { padding: 18px var(--pad) 6px; }
+.ladder h2 { margin: 0; font-size: 19px; line-height: 1.25; font-weight: 700; letter-spacing: -0.01em; }
+.ladder > p { margin: 4px 0 12px; font-size: 13px; }
+.rung { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; width: 100%; padding: 9px 0; }
+.rung + .rung { border-top: 1px dashed var(--sep); }
+.rung .tl { font-weight: 700; color: var(--tc); }
+.rung .track { display: block; height: 12px; border-radius: 6px; background: var(--bg2); overflow: hidden; }
+.rung .fill { display: block; height: 100%; border-radius: 6px; background: var(--tc); transform-origin: left; }
+.rung .rmeta { display: block; margin-top: 5px; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rung .rapy { text-align: right; min-width: 84px; }
+.rung .rapy b { display: block; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.rung .rapy small { display: block; font-size: 12.5px; color: var(--hint); }
+.rung.empty .rapy, .rung.empty .rmeta { color: var(--hint); }
+@media (prefers-reduced-motion: no-preference) {
+  .ladder.enter .fill { animation: grow .6s cubic-bezier(.2,.7,.2,1) both; }
+  @keyframes grow { from { transform: scaleX(0); } }
+}
+
+/* Список */
+.list { margin-top: 10px; border-top: 8px solid var(--bg2); }
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px var(--pad); font-size: 13px; font-weight: 600; }
+.viewseg { display: inline-flex; background: var(--bg2); border-radius: 8px; padding: 2px; }
+.viewseg button { padding: 4px 10px; border-radius: 6px; font-size: 12.5px; font-weight: 500; color: var(--hint); }
+.viewseg button[aria-pressed="true"] { background: var(--bg); color: var(--text); }
+.row { display: block; width: 100%; padding: 12px var(--pad); border-bottom: 1px solid var(--sep); }
+.row:active, .rung:active, tr[data-id]:active td { background: var(--bg2); }
+.r-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.badge { flex: none; display: inline-grid; place-items: center; width: 28px; height: 21px; border-radius: 6px; font-size: 11.5px; font-weight: 700; color: var(--tc); background: color-mix(in srgb, var(--tc) 15%, transparent); }
+.badge.big { width: 44px; height: 32px; font-size: 16px; border-radius: 8px; }
+.rname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rname .sym { font-weight: 400; }
+.rsub { display: flex; flex-wrap: wrap; column-gap: 10px; font-size: 12.5px; color: var(--hint); margin: 3px 0 0 36px; }
+.rsub .warn { color: var(--t3); }
+.you { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 9px 0 0; border-radius: 10px; background: var(--hl); padding: 7px 2px; }
+.you div { padding: 0 8px; min-width: 0; }
+.you div + div { border-left: 1px solid color-mix(in srgb, var(--btn) 18%, transparent); }
+.you span { display: block; font-size: 11px; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.you b { display: block; font-size: 14.5px; font-weight: 600; white-space: nowrap; }
+.you .apr b { color: var(--btn); }
+.rw { margin: 6px 0 0; font-size: 12.5px; }
+.rw b { font-weight: 600; }
+.more { display: block; width: calc(100% - 2 * var(--pad)); margin: 14px var(--pad); padding: 11px; text-align: center; border-radius: 10px; background: var(--bg2); font-weight: 500; }
+.empty { padding: 26px var(--pad); }
+.empty p { margin: 0 0 4px; }
+
+/* Таблица как в Google Sheets */
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+.grid th, .grid td { padding: 9px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--sep); }
+.grid th { background: var(--bg2); font-weight: 600; font-size: 12px; color: var(--hint); vertical-align: bottom; white-space: normal; min-width: 76px; line-height: 1.25; }
+.grid th[data-sort] { cursor: pointer; }
+.grid th[aria-sort="descending"]::after { content: " ↓"; }
+.grid th:first-child, .grid td:first-child { position: sticky; left: 0; text-align: left; z-index: 1; box-shadow: 1px 0 0 var(--sep); }
+.grid td:first-child { background: var(--bg); max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.grid th:first-child { background: var(--bg2); z-index: 2; }
+.grid td:first-child .badge { margin-right: 6px; }
+.grid td.l, .grid th.l { text-align: left; }
+.grid .hl { background: var(--hl); color: var(--text); font-weight: 600; }
+.grid th.hl { background: var(--hl-strong); color: var(--text); }
+.grid td.apr { color: var(--btn); }
+.grid sup { font-size: 9.5px; color: var(--hint); margin-left: 2px; }
+.grid tr[data-id] { cursor: pointer; }
+
+.state { padding: 36px var(--pad); }
+.state h2 { margin: 0 0 6px; font-size: 17px; }
+.state p { margin: 0 0 14px; }
+.state code { background: var(--bg2); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.btn { display: inline-block; padding: 11px 16px; border-radius: 10px; background: var(--btn); color: var(--btn-text); font-weight: 600; text-align: center; }
+.btn.ghost { background: var(--bg2); color: var(--text); }
+.skel { height: 52px; margin: 0 var(--pad) 8px; border-radius: 10px; background: var(--bg2); }
+@media (prefers-reduced-motion: no-preference) { .skel { animation: pulse 1.2s ease-in-out infinite alternate; } @keyframes pulse { to { opacity: .45; } } }
+.foot { padding: 18px var(--pad) 28px; font-size: 12.5px; color: var(--hint); }
+.foot p { margin: 0 0 6px; }
+
+/* Методика и тиры */
+.doc { padding: 18px var(--pad) 8px; max-width: 680px; }
+.doc h2 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
+.doc h3 { font-size: 16px; margin: 24px 0 6px; }
+.doc p { margin: 0 0 10px; }
+.formulas { margin: 8px 0 12px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 14px; }
+.formulas dt { font-weight: 600; }
+.formulas dt.hl { color: var(--btn); }
+.formulas dd { margin: 0; color: var(--hint); }
+.example { padding: 12px 14px; border-radius: 12px; background: var(--hl); font-size: 14px; margin: 6px 0 12px; }
+.tierdef { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 12px 0; border-top: 1px solid var(--sep); }
+.tierdef p { margin: 2px 0 0; font-size: 14px; }
+.proto { padding: 10px 0; border-top: 1px solid var(--sep); }
+.proto b { font-weight: 600; }
+.proto .pmeta { font-size: 12.5px; color: var(--hint); margin-left: 6px; }
+.proto p { margin: 3px 0 0; font-size: 14px; }
+.tierhead { display: flex; align-items: center; gap: 10px; margin: 26px 0 4px; }
+.tierhead h3 { margin: 0; }
+.taglist { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.taglist span { font-size: 13px; padding: 3px 9px; border-radius: 6px; color: var(--tc); background: color-mix(in srgb, var(--tc) 13%, transparent); }
+
+/* Карточка пула */
+.sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; background: rgba(0,0,0,0); transition: background .2s; }
+.sheet[hidden] { display: none; }
+.sheet.open { background: rgba(0,0,0,.42); }
+.panel { width: 100%; max-height: calc(var(--tg-viewport-stable-height, 100vh) * .92); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg); border-radius: 18px 18px 0 0; padding: 8px var(--pad) calc(20px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%); transition: transform .26s cubic-bezier(.2,.7,.2,1); }
+.sheet.open .panel { transform: none; }
+@media (prefers-reduced-motion: reduce) { .panel, .sheet { transition: none; } }
+@media (min-width: 720px) { .panel { max-width: 580px; margin: 0 auto 24px; border-radius: 18px; } .sheet { justify-content: center; } }
+.grab { width: 38px; height: 4px; border-radius: 2px; background: var(--sep); margin: 2px auto 10px; }
+.sh-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.sh-head h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+.sh-head p { margin: 2px 0 0; font-size: 14px; }
+.x { width: 32px; height: 32px; border-radius: 50%; background: var(--bg2); text-align: center; color: var(--hint); flex: none; }
+.mine { margin: 14px 0 10px; padding: 14px; border-radius: 14px; background: var(--hl); }
+.mine > .hint { font-size: 13px; margin-bottom: 8px; }
+.mine-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.mine-grid span { display: block; font-size: 12.5px; color: var(--hint); }
+.mine-grid b { display: block; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.mine-grid .apr b { color: var(--btn); }
+.mine .rw { margin: 10px 0 0; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 12px 0; }
+.facts dt { font-size: 12.5px; color: var(--hint); }
+.facts dd { margin: 0; font-weight: 600; }
+.risk { padding: 14px; border-radius: 14px; background: var(--bg2); margin: 8px 0 12px; }
+.risk-top { display: flex; gap: 12px; align-items: center; }
+.risk-top .hint { font-size: 13px; }
+.risk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 12px 0 10px; }
+.risk-grid div { padding: 7px 8px; border-radius: 8px; background: var(--bg); font-size: 12.5px; }
+.risk-grid b { display: block; font-size: 15px; color: var(--tc); }
+.risk > p { margin: 0 0 6px; font-size: 14px; }
+.flags { list-style: none; margin: 0 0 14px; padding: 0; }
+.flags li { position: relative; padding: 6px 0 6px 18px; font-size: 14px; }
+.flags li::before { content: ""; position: absolute; left: 2px; top: 13px; width: 8px; height: 8px; border-radius: 2px; background: var(--tc); }
+.chart { margin: 4px 0 14px; }
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; font-size: 13px; margin-bottom: 6px; }
+.chart svg { display: block; width: 100%; height: 120px; }
+.chart .line { fill: none; stroke: var(--tc); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.chart .bar { fill: var(--btn); opacity: .75; }
+.chart .avg { stroke: var(--hint); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.chart-axis { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
+.actions { display: grid; gap: 8px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <nav class="tabs" role="tablist" aria-label="Разделы">
+    <button role="tab" data-tab="pairs">Пары</button>
+    <button role="tab" data-tab="stables">Стейблы</button>
+    <button role="tab" data-tab="rewards">Награды</button>
+    <button role="tab" data-tab="tiers">Методика</button>
+  </nav>
+</header>
+<section class="controls" id="controls"></section>
+<main id="results"></main>
+<div class="sheet" id="sheet" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-label="Детали пула">
+    <div class="grab"></div>
+    <div id="sheet-body"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const C = window.DYCore;
+  const T = window.TIERS;
+  const PAGE = 40;
+  const SORTS = {
+    pairs: [["ra", "С поправкой на риск"], ["apr", "По APR"], ["month", "По доходу в месяц"], ["voltvl", "По объёму / TVL"], ["tvl", "По TVL"], ["tier", "Сначала надёжные"]],
+    stables: [["ra", "С поправкой на риск"], ["apr", "По APR"], ["month", "По доходу в месяц"], ["tvl", "По TVL"], ["tier", "Сначала надёжные"]],
+    rewards: [["rew", "По APR наград"], ["ra", "С поправкой на риск"], ["apr", "По общему APR"], ["month", "По доходу в месяц"], ["tvl", "По TVL"]]
+  };
+
+  const state = {
+    tab: "pairs", capital: 6000, profile: 2, minTvl: 1e5, chain: "all",
+    sort: { pairs: "ra", stables: "ra", rewards: "rew" },
+    view: { pairs: "table", stables: "list", rewards: "list" },
+    stableKind: "all", asset: "all", quote: "all", pairKind: "all", rewardKind: "all", showOutliers: false,
+    limit: PAGE, data: null, pools: [], byId: new Map(), loading: true, error: null, sheetPool: null, animateLadder: true
+  };
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /* ---------- форматирование ---------- */
+  const nf = (a, b) => new Intl.NumberFormat("ru-RU", { minimumFractionDigits: a, maximumFractionDigits: b == null ? a : b });
+  const NF0 = nf(0), NF1 = nf(1), NF2 = nf(2);
+  function fmtPct(v) {
+    if (v == null || !isFinite(v)) return "—";
+    const a = Math.abs(v);
+    return (a >= 100 ? NF0 : a >= 10 ? NF1 : NF2).format(v) + "%";
+  }
+  function fmtShare(v) { return v == null ? "—" : v > 0 && v < 0.01 ? "<0,01%" : NF2.format(v) + "%"; }
+  function fmtUsd(v) {
+    if (v == null || !isFinite(v)) return "—";
+    const a = Math.abs(v);
+    if (a >= 1e9) return "$" + NF1.format(v / 1e9) + " млрд";
+    if (a >= 1e6) return "$" + (a >= 1e8 ? NF0 : NF1).format(v / 1e6) + " млн";
+    if (a >= 1e4) return "$" + NF0.format(v / 1e3) + " тыс";
+    return "$" + NF0.format(v);
+  }
+  const fmtCash = (v) => v == null || !isFinite(v) ? "—" : "$" + (Math.abs(v) >= 1000 ? NF0 : NF2).format(v);
+  const fmtCashShort = (v) => v == null || !isFinite(v) ? "—" : "$" + (Math.abs(v) >= 100 ? NF0 : NF2).format(v);
+  const fmtApr = (v) => v == null || !isFinite(v) ? "—" : (Math.abs(v) >= 1000 ? NF0 : NF2).format(v) + "%";
+  const fmtRatio = (v) => v == null || !isFinite(v) ? "—" : NF2.format(v);
+  const fmtFee = (f) => f == null ? "—" : nf(2, 4).format(f * 100) + "%";
+  const fmtDate = (d) => d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  function plural(n, one, few, many) {
+    const a = n % 10, b = n % 100;
+    if (a === 1 && b !== 11) return one;
+    if (a >= 2 && a <= 4 && (b < 12 || b > 14)) return few;
+    return many;
+  }
+
+  /* ---------- Telegram ---------- */
+  const inTelegram = () => !!(tg && tg.platform && tg.platform !== "unknown");
+  const tgAtLeast = (v) => { try { return inTelegram() && tg.isVersionAtLeast(v); } catch (e) { return false; } };
+  function initTelegram() {
+    if (!inTelegram()) return;
+    try { tg.ready(); tg.expand(); } catch (e) {}
+    const applyTheme = () => { document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light"; };
+    applyTheme();
+    try { tg.onEvent("themeChanged", applyTheme); } catch (e) {}
+    if (tgAtLeast("6.1")) {
+      try { tg.setHeaderColor("bg_color"); tg.setBackgroundColor("bg_color"); } catch (e) {}
+      tg.BackButton.onClick(closeSheet);
+    }
+    tg.MainButton.onClick(() => { const p = state.sheetPool; if (p) openLink(p.url); });
+  }
+  const haptic = () => { if (tgAtLeast("6.1")) { try { tg.HapticFeedback.selectionChanged(); } catch (e) {} } };
+  function openLink(url) {
+    if (!url) return;
+    if (inTelegram()) { try { tg.openLink(url); return; } catch (e) {} }
+    window.open(url, "_blank", "noopener");
+  }
+
+  /* Капитал помним и в браузере, и в облаке Telegram (переживает переустановку) */
+  function loadCapital() {
+    try { const v = Number(localStorage.getItem("dy-capital")); if (v > 0) state.capital = v; } catch (e) {}
+    if (tgAtLeast("6.9")) {
+      tg.CloudStorage.getItem("capital", (err, val) => {
+        const v = Number(val);
+        if (!err && v > 0 && v !== state.capital) { state.capital = v; renderControls(); renderResults(); }
+      });
+    }
+  }
+  function saveCapital() {
+    try { localStorage.setItem("dy-capital", String(state.capital)); } catch (e) {}
+    if (tgAtLeast("6.9")) { try { tg.CloudStorage.setItem("capital", String(state.capital)); } catch (e) {} }
+  }
+
+  /* ---------- данные ---------- */
+  async function load() {
+    state.loading = true; state.error = null; renderControls(); renderResults();
+    try {
+      const r = await fetch("data.json", { cache: "no-cache" });
+      if (!r.ok) throw new Error(r.status === 404 ? "nodata" : "Сервер ответил кодом " + r.status);
+      const d = await r.json();
+      if (!d || !Array.isArray(d.pools)) throw new Error("Файл data.json повреждён");
+      state.data = d;
+      state.pools = d.pools.map(p => Object.assign(p, { flags: p.flags || [], assets: p.assets || [], rt: p.rt || [] }));
+      state.byId = new Map(state.pools.map(p => [p.id, p]));
+    } catch (e) {
+      state.error = e.message === "Failed to fetch" || e.message === "nodata" ? "nodata" : (e.message || String(e));
+    }
+    state.loading = false; state.animateLadder = true;
+    renderControls(); renderResults();
+  }
+
+  /* ---------- управление ---------- */
+  function chips(key, options, extra) {
+    return `<div class="chips" role="group">${options.map(([v, label]) =>
+      `<button class="chip" data-sub="${key}" data-v="${esc(v)}" aria-pressed="${state[key] === v}">${esc(label)}</button>`).join("")}${extra || ""}</div>`;
+  }
+
+  function renderControls() {
+    document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
+    const box = $("#controls");
+    if (state.tab === "tiers") { box.hidden = true; box.innerHTML = ""; return; }
+    box.hidden = false;
+    const tab = state.tab;
+    const tabPools = state.pools.filter(p => tab === "stables" ? p.kind === "stable" : tab === "pairs" ? p.kind === "pair" : p.rew > 0);
+    const chains = C.chainList(tabPools).slice(0, 25);
+    if (state.chain !== "all" && !chains.includes(state.chain)) state.chain = "all";
+    const sortOpts = SORTS[tab];
+    if (!sortOpts.some(o => o[0] === state.sort[tab])) state.sort[tab] = sortOpts[0][0];
+
+    let assetSelect = "";
+    if (tab !== "stables") {
+      const present = new Set(tabPools.flatMap(p => p.assets));
+      const uni = (state.data ? state.data.universe : []).filter(u => present.has(u.symbol)).map(u => u.symbol);
+      const extras = [...present].filter(s => !uni.includes(s)).sort();
+      if (state.asset !== "all" && !present.has(state.asset)) state.asset = "all";
+      assetSelect = `<select id="asset" aria-label="Актив">
+        <option value="all">Все активы топ-30</option>
+        ${uni.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}
+        ${extras.length ? `<optgroup label="Токенизированные акции и прочее">${extras.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}</optgroup>` : ""}
+      </select>`;
+    }
+    const tvlOpts = [[1e4, "TVL от $10 тыс"], [1e5, "TVL от $100 тыс"], [1e6, "TVL от $1 млн"], [1e7, "TVL от $10 млн"], [5e7, "TVL от $50 млн"], [1e8, "TVL от $100 млн"]];
+    const outliers = `<button class="chip toggle" data-toggle="showOutliers" aria-pressed="${state.showOutliers}">Выбросы</button>`;
+    let sub = "";
+    if (tab === "stables") {
+      sub = chips("stableKind", [["all", "Все типы"], ["lending", "Лендинг"], ["savings", "Сбережения"], ["lp", "LP стейбл-стейбл"], ["strategy", "Стратегии"]], outliers);
+    } else if (tab === "pairs") {
+      sub = chips("quote", [["all", "Все пары"], ["stable", "Со стейблом"], ["major", "С ETH или BTC"], ["alt", "Альт-альт"]]) +
+        chips("pairKind", [["all", "Все типы"], ["dex", "DEX LP"], ["perp", "Перп-LP (GMX)"]], outliers);
+    } else {
+      sub = chips("rewardKind", [["all", "Все"], ["stable", "Стейблкоины"], ["pair", "Пары"], ["single", "Один актив"]], outliers);
+    }
+    box.innerHTML = `
+      <div class="capital">
+        <label for="capital">Капитал</label>
+        <span class="field">$<input id="capital" inputmode="numeric" autocomplete="off" value="${esc(NF0.format(state.capital))}"></span>
+        <span class="hint">на эту сумму считаются доля в пуле и доход</span>
+      </div>
+      <div class="seg" role="group" aria-label="Допустимый риск">
+        <button data-profile="1" aria-pressed="${state.profile === 1}"><span class="dots"><i class="t1"></i></span>Надёжно</button>
+        <button data-profile="2" aria-pressed="${state.profile === 2}"><span class="dots"><i class="t1"></i><i class="t2"></i></span>Баланс</button>
+        <button data-profile="3" aria-pressed="${state.profile === 3}"><span class="dots"><i class="t1"></i><i class="t2"></i><i class="t3"></i></span>Все</button>
+      </div>
+      <div class="selects">
+        ${assetSelect}
+        <select id="minTvl" aria-label="Минимальный TVL">${tvlOpts.map(([v, l]) => `<option value="${v}"${v === state.minTvl ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="chain" aria-label="Сеть"><option value="all">Все сети</option>${chains.map(c => `<option value="${esc(c)}"${c === state.chain ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <select id="sort" aria-label="Сортировка">${sortOpts.map(([v, l]) => `<option value="${v}"${v === state.sort[tab] ? " selected" : ""}>${l}</option>`).join("")}</select>
+      </div>
+      ${sub}`;
+    const a = $("#asset"); if (a) a.value = state.asset;
+  }
+
+  /* ---------- результаты ---------- */
+  function renderResults() {
+    const main = $("#results");
+    if (state.tab === "tiers") { main.innerHTML = renderMethod(); return; }
+    if (state.loading) { main.innerHTML = renderLoading(); return; }
+    if (state.error) { main.innerHTML = renderError(); return; }
+    C.applyCapital(state.pools, state.capital);
+    const s = Object.assign({}, state, { tab: state.tab });
+    const base = C.filterPools(state.pools, s);
+    const list = C.sortPools(base.filter(p => p.tier <= state.profile), state.sort[state.tab]);
+    main.innerHTML = renderLadder(C.ladder(base)) + renderList(list) + renderFooter();
+    state.animateLadder = false;
+  }
+
+  function renderLadder(best) {
+    const order = [3, 2, 1];
+    const maxApr = Math.max(1, ...order.map(t => best[t] ? best[t].m.apr : 0));
+    const rungs = order.map(t => {
+      const p = best[t];
+      if (!p) return `<div class="rung empty t${t}"><span class="tl">T${t}</span><span><span class="track"></span><span class="rmeta">Нет пулов при текущих фильтрах</span></span><span class="rapy"><b>—</b></span></div>`;
+      const w = Math.max(2, Math.min(100, p.m.apr / maxApr * 100));
+      return `<button class="rung t${t}" data-id="${esc(p.id)}">
+        <span class="tl">T${t}</span>
+        <span><span class="track"><span class="fill" style="width:${w.toFixed(1)}%;animation-delay:${(3 - t) * 0.08}s"></span></span>
+        <span class="rmeta"><b>${esc(p.pn)}</b> ${esc(p.sym)} <span class="hint">${esc(p.chain)}</span></span></span>
+        <span class="rapy"><b>${fmtApr(p.m.apr)}</b><small>${fmtCash(p.m.month)} в месяц</small></span></button>`;
+    }).join("");
+    const title = { pairs: "Куда поставить монету в пару", stables: "Куда положить стейблкоины", rewards: "Где за депозит платят токенами" }[state.tab];
+    return `<section class="ladder${state.animateLadder ? " enter" : ""}"><h2>${title}</h2>
+      <p class="hint">Лучший вариант на каждом уровне риска для капитала ${fmtCash(state.capital)}: учитывает надёжность, TVL и устойчивость дохода.</p>${rungs}</section>`;
+  }
+
+  function youStrip(p) {
+    const m = p.m;
+    return `<div class="you">
+      <div><span>Доля</span><b>${fmtShare(m.share)}</b></div>
+      <div><span>В сутки</span><b>${fmtCash(m.day)}</b></div>
+      <div><span>В месяц</span><b>${fmtCashShort(m.month)}</b></div>
+      <div class="apr"><span>APR</span><b>${fmtApr(m.apr)}</b></div></div>`;
+  }
+
+  function rewardLine(p) {
+    if (!(p.rew > 0)) return "";
+    const toks = p.rt.length ? p.rt.join(", ") : "токены проекта";
+    return `<div class="rw">Награды <b>${esc(toks)}</b>: ${fmtPct(p.rew)} годовых, ${fmtCash(p.m.monthRew)} в месяц</div>`;
+  }
+
+  function rowHTML(p) {
+    const sub = [`<span>${esc(p.chain)}</span>`];
+    if (p.fee != null) sub.push(`<span>комиссия ${fmtFee(p.fee)}</span>`);
+    sub.push(`<span>TVL ${fmtUsd(p.tvl)}</span>`);
+    if (p.m.volTvl != null) sub.push(`<span>объём/TVL ${fmtRatio(p.m.volTvl)}</span>`);
+    else sub.push(`<span>${esc(C.catLabel(p.cat))}</span>`);
+    if (p.meta) sub.push(`<span>${esc(p.meta)}</span>`);
+    if (p.m.share > C.DILUTION_WARN) sub.push(`<span class="warn">твой взнос — ${fmtShare(p.m.share)} пула</span>`);
+    return `<button class="row" data-id="${esc(p.id)}">
+      <span class="r-top"><span class="badge t${p.tier}" title="Итоговый риск">T${p.tier}</span>
+        <span class="rname">${esc(p.pn)} <span class="sym">${esc(p.sym)}</span></span></span>
+      <span class="rsub">${sub.join("")}</span>
+      ${youStrip(p)}${state.tab === "rewards" ? rewardLine(p) : ""}</button>`;
+  }
+
+  /* Колонки таблицы. hl — последние 4 показателя, их подсвечиваем */
+  function columns() {
+    const pool = { label: "Пул", cls: "l", td: p => `<span class="badge t${p.tier}">T${p.tier}</span>${esc(p.sym)}` };
+    const chain = { label: "Сеть", cls: "l", td: p => esc(p.chain) };
+    const proto = { label: "Протокол", cls: "l", td: p => esc(p.pn) };
+    const tvl = { label: "TVL", sort: "tvl", td: p => fmtUsd(p.tvl) };
+    const you = [
+      { label: "Твоя доля в пуле", cls: "hl", td: p => fmtShare(p.m.share) },
+      { label: "Твой доход в сутки", cls: "hl", td: p => fmtCash(p.m.day) },
+      { label: "Доход в месяц", cls: "hl", sort: "month", td: p => fmtCash(p.m.month) },
+      { label: "APR", cls: "hl apr", sort: "apr", td: p => fmtApr(p.m.apr) }
+    ];
+    const v1d = { label: "Объём 1 день", td: p => p.v1d == null ? "—" : fmtUsd(p.v1d) + (p.v30 == null ? "<sup>24ч</sup>" : p.vdays < 30 ? `<sup>${p.vdays}д</sup>` : "") };
+    const volTvl = { label: "Объём / TVL", sort: "voltvl", td: p => fmtRatio(p.m.volTvl) };
+    const feesDay = { label: "Комиссии пула в сутки", td: p => fmtCash(p.m.feesDay) };
+    if (state.tab === "pairs") return [pool, chain, proto,
+      { label: "Уровень комиссии", td: p => fmtFee(p.fee) }, tvl,
+      { label: "Объём 30 дней", td: p => fmtUsd(p.v30) }, v1d, volTvl, feesDay, ...you];
+    if (state.tab === "stables") return [pool, chain, proto,
+      { label: "Тип", cls: "l", td: p => esc(C.catLabel(p.cat)) }, tvl,
+      { label: "APY база", td: p => fmtPct(p.base) }, { label: "APY награды", sort: "rew", td: p => p.rew ? fmtPct(p.rew) : "—" },
+      { label: "Уровень комиссии", td: p => fmtFee(p.fee) }, volTvl, ...you];
+    return [pool, chain, proto,
+      { label: "Токены наград", cls: "l", td: p => esc(p.rt.join(", ") || "—") }, tvl,
+      { label: "APY база", td: p => fmtPct(p.base) }, { label: "APR наград", sort: "rew", td: p => fmtPct(p.rew) },
+      { label: "Награды в месяц", td: p => fmtCash(p.m.monthRew) }, ...you];
+  }
+
+  function tableHTML(rows) {
+    const cols = columns();
+    const cur = state.sort[state.tab];
+    const head = cols.map(c => `<th class="${c.cls || ""}"${c.sort ? ` data-sort="${c.sort}"` : ""}${c.sort === cur ? ' aria-sort="descending"' : ""}>${esc(c.label)}</th>`).join("");
+    const body = rows.map(p => `<tr data-id="${esc(p.id)}" tabindex="0">${cols.map(c => `<td class="${c.cls || ""}">${c.td(p)}</td>`).join("")}</tr>`).join("");
+    return `<div class="tablewrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  function renderList(list) {
+    if (!list.length) return `<section class="list empty"><p>Нет пулов под эти фильтры.</p><p class="hint">Снизьте порог TVL, выберите другой актив или сеть, либо режим «Все».</p></section>`;
+    const shown = list.slice(0, state.limit);
+    const rest = list.length - shown.length;
+    const view = state.view[state.tab];
+    return `<section class="list">
+      <div class="list-head"><span>${list.length} ${plural(list.length, "пул", "пула", "пулов")}</span>
+        <span class="viewseg" role="group" aria-label="Вид"><button data-view="list" aria-pressed="${view === "list"}">Список</button><button data-view="table" aria-pressed="${view === "table"}">Таблица</button></span></div>
+      ${view === "table" ? tableHTML(shown) : shown.map(rowHTML).join("")}
+      ${rest > 0 ? `<button class="more" data-action="more">Показать ещё ${Math.min(PAGE, rest)} из ${rest}</button>` : ""}
+    </section>`;
+  }
+
+  function renderFooter() {
+    const d = state.data, src = d.sources || {};
+    const parts = [];
+    const gt = src.geckoterminal;
+    if (gt) parts.push(gt.status === "ok" ? `GeckoTerminal: ${gt.count} DEX-пулов, у ${gt.with30d} — объём за 30 дней` : "GeckoTerminal недоступен");
+    if (src.defillama) parts.push(src.defillama.status === "ok" ? `DefiLlama: ${src.defillama.count}` : "DefiLlama недоступен");
+    if (src.coingecko) parts.push(src.coingecko.status === "ok" ? "топ-30 по CoinGecko" : "топ-30 по резервному списку");
+    const when = d.generated ? new Date(d.generated).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+    return `<footer class="foot"><p>Данные обновлены ${esc(when)}. ${esc(parts.join("; "))}.</p>
+      <p>Не инвестиционная рекомендация. Перед депозитом проверьте пул на сайте протокола.</p></footer>`;
+  }
+
+  function renderLoading() {
+    return `<div class="state"><h2>Загружаем пулы</h2><p class="hint">Секунду, читаем свежую выгрузку.</p></div><div class="skel"></div><div class="skel"></div><div class="skel"></div>`;
+  }
+  function renderError() {
+    if (state.error === "nodata") {
+      return `<div class="state"><h2>Нет данных о пулах</h2>
+        <p>Рядом с приложением нет файла data.json. Его собирает сборщик: <code>python collector/collect.py</code>. На GitHub Pages он запускается сам по расписанию — проверьте вкладку Actions в репозитории.</p>
+        <button class="btn" data-action="retry">Проверить снова</button></div>`;
+    }
+    return `<div class="state"><h2>Данные не загрузились</h2><p>${esc(state.error)}. Проверьте соединение.</p><button class="btn" data-action="retry">Повторить загрузку</button></div>`;
+  }
+
+  /* ---------- методика ---------- */
+  function renderMethod() {
+    const byTier = { 1: [], 2: [], 3: [] };
+    T.protocols.forEach(p => byTier[p.tier].push(p));
+    const tierTitle = { 1: "Проверенные временем", 2: "Зрелые, с оговорками", 3: "Повышенный риск" };
+    const protoList = (t) => byTier[t].slice().sort((a, b) => a.name.localeCompare(b.name)).map(p =>
+      `<div class="proto"><b>${esc(p.name)}</b><span class="pmeta">${esc(C.catLabel(p.cat))}, с ${esc(p.since)}</span><p>${esc(p.why)}</p></div>`).join("");
+    const tags = (arr, t) => arr.length ? `<div class="taglist t${t}">${arr.map(x => `<span>${esc(x)}</span>`).join("")}</div>` : "";
+    const byVal = (obj, t) => Object.keys(obj).filter(k => obj[k] === t);
+    const A = T.assets;
+    const uni = state.data ? state.data.universe.map(u => u.symbol) : A.fallback_top;
+    const uniT1 = uni.filter(s => (A.volatile_tiers[s] || A.alt_default_tier) === 1);
+    const uniT2 = uni.filter(s => (A.volatile_tiers[s] || A.alt_default_tier) === 2);
+    return `<article class="doc">
+      <h2>Как считаются показатели</h2>
+      <p>Для DEX-пулов всё считается так же, как в вашей таблице, только данные подтягиваются автоматически: уровень комиссии, TVL и дневной объём за 30 дней берутся из GeckoTerminal для пулов топ-30 монет.</p>
+      <dl class="formulas">
+        <dt>Объём 1 день</dt><dd>объём за 30 дней / 30 (у молодых пулов — среднее за прожитые дни)</dd>
+        <dt>Объём / TVL</dt><dd>объём 1 день / TVL — сколько раз в сутки оборачивается ликвидность</dd>
+        <dt>Комиссии в сутки</dt><dd>объём 1 день × уровень комиссии</dd>
+        <dt class="hl">Твоя доля в пуле</dt><dd>капитал / (TVL + капитал)</dd>
+        <dt class="hl">Твой доход в сутки</dt><dd>комиссии в сутки × твоя доля</dd>
+        <dt class="hl">Доход в месяц</dt><dd>доход в сутки × 30</dd>
+        <dt class="hl">APR</dt><dd>доход в сутки × 365 / капитал</dd>
+      </dl>
+      <p>Для лендингов и хранилищ, где нет комиссий за обмен, доход в сутки = капитал × APY / 365.</p>
+      <div class="example"><b>Одно отличие от таблицы.</b> В таблице доля = капитал / TVL, но твой депозит сам увеличивает пул. Для крупных пулов разницы нет, а для маленьких она большая: в пуле ETHUSDC V4 на Arbitrum с TVL $10 тыс таблица даёт долю 59,41% и APR 24,32%, а с учётом твоих $6 000 в пуле доля 37,27% и APR 15,25%.</div>
+      <p>Чего эти цифры не учитывают: непостоянные потери при движении цены и то, что в Uniswap V3/V4 доход зависит от выбранного диапазона. Расчёт показывает средний доход пула на твою долю — при узком диапазоне можно заработать больше, при выходе цены за диапазон — ноль.</p>
+
+      <h2 style="margin-top:26px">Как устроена оценка риска</h2>
+      <p>Тир показывает риск потерять депозит из-за протокола и инфраструктуры, а не из-за движения рынка. Итоговый тир пула — худший из трёх: протокол, активы в пуле и сеть.</p>
+      <div class="tierdef"><span class="badge big t1">T1</span><div><b>Проверенные временем</b><p>Два года и больше без потерь вкладчиков из-за кода, крупный TVL, несколько аудитов и баг-баунти, понятное управление.</p></div></div>
+      <div class="tierdef"><span class="badge big t2">T2</span><div><b>Зрелые, с оговорками</b><p>Меньше истории или сложнее архитектура; инциденты в прошлых версиях с компенсацией; кураторы, внешние стратегии, молодые сети.</p></div></div>
+      <div class="tierdef"><span class="badge big t3">T3</span><div><b>Повышенный риск</b><p>Недавние взломы, неоценённые протоколы, токены без подтверждения на CoinGecko. Всё, чего нет в списках, — T3.</p></div></div>
+      <p>Доходность с поправкой на риск = APR × множитель тира (1; 0,75; 0,5) × множитель ликвидности (0,6 при TVL $1 млн → 1 при $1 млрд). Награды токенами в ней считаются вполовину, всплески APY выше полуторного среднего за 30 дней срезаются.</p>
+
+      ${[1, 2, 3].map(t => `<div class="tierhead"><span class="badge big t${t}">T${t}</span><h3>${tierTitle[t]}</h3></div>${protoList(t)}`).join("")}
+
+      <h3>Монеты в парах</h3>
+      <p class="hint">Топ-30 по капитализации без стейблкоинов и обёрток обновляется при каждой сборке. ETH, BTC и их основные обёртки, а также LINK, UNI и AAVE — T1; остальные монеты топ-30 — T2 (риск мостов и ликвидности); рестейкинг-токены и непроверенные токены — T3.</p>
+      ${tags(uniT1, 1)}${tags(uniT2, 2)}
+      <p class="hint">Токенизированные акции учитываются только в указанных сетях:</p>
+      ${tags(A.extra_assets.map(e => e.symbol + " — " + e.chains.join(", ")), 2)}
+
+      <h3>Сети</h3>
+      <p class="hint">T1 — Ethereum и крупные L2-роллапы. T2 — альтернативные L1 и молодые L2, включая Robinhood Chain (работает с июля 2026). Остальные — T3.</p>
+      ${tags(byVal(T.chains, 1), 1)}${tags(byVal(T.chains, 2), 2)}
+
+      <h3>Стейблкоины</h3>
+      ${tags(byVal(A.stable, 1), 1)}${tags(byVal(A.stable, 2), 2)}${tags(byVal(A.stable, 3), 3)}
+
+      <h3>Ограничения</h3>
+      <p>Классификация экспертная, версия ${esc(T.version)}, правится в файле tiers.js. Объём за 30 дней собирается для 200 самых активных пулов, у остальных расчёт идёт по объёму за последние 24 часа (в таблице помечено «24ч»). Это аналитический инструмент, а не инвестиционная рекомендация.</p>
+    </article>`;
+  }
+
+  /* ---------- карточка пула ---------- */
+  const fact = (k, v) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`;
+  const riskCell = (k, t) => `<div class="t${t}">${esc(k)}<b>T${t}</b></div>`;
+
+  function sheetHTML(p) {
+    const m = p.m, pr = T.protocols.find(x => x.id === p.proto);
+    const parts = [];
+    parts.push(`<div class="sh-head"><div><h3>${esc(p.pn)} ${esc(p.sym)}</h3>
+      <p class="hint">${esc(p.chain)}${p.fee != null ? ", комиссия " + fmtFee(p.fee) : ""}${p.meta ? ", " + esc(p.meta) : ""}</p></div>
+      <button class="x" data-action="close" aria-label="Закрыть">✕</button></div>`);
+    parts.push(`<div class="mine"><div class="hint">Твой расчёт при капитале ${fmtCash(state.capital)}</div>
+      <div class="mine-grid">
+        <div><span>Твоя доля в пуле</span><b>${fmtShare(m.share)}</b></div>
+        <div><span>Твой доход в сутки</span><b>${fmtCash(m.day)}</b></div>
+        <div><span>Доход в месяц</span><b>${fmtCash(m.month)}</b></div>
+        <div class="apr"><span>APR</span><b>${fmtApr(m.apr)}</b></div>
+      </div>${rewardLine(p)}</div>`);
+    const f = [];
+    if (C.hasFees(p)) {
+      f.push(fact("Уровень комиссии", fmtFee(p.fee)), fact("TVL", fmtUsd(p.tvl)),
+        fact("Объём за 30 дней", p.v30 != null ? fmtUsd(p.v30) : "нет данных"),
+        fact(p.v30 != null && p.vdays < 30 ? `Объём в день (среднее за ${p.vdays} ${plural(p.vdays, "день", "дня", "дней")})` : "Объём за 1 день", fmtUsd(p.v1d)),
+        fact("Объём за последние 24 ч", fmtUsd(p.v24)), fact("Объём / TVL", fmtRatio(m.volTvl)),
+        fact("Комиссии пула в сутки", fmtCash(m.feesDay)), fact("С поправкой на риск", fmtPct(p.ra)));
+      if (p.age != null) f.push(fact("Возраст пула", `${p.age} ${plural(p.age, "день", "дня", "дней")}`));
+    } else {
+      f.push(fact("APY база", fmtPct(p.base)), fact("APY награды", p.rew ? fmtPct(p.rew) : "—"),
+        fact("Среднее за 30 дней", p.m30 != null ? fmtPct(p.m30) : "нет данных"), fact("TVL", fmtUsd(p.tvl)),
+        fact("Тип", esc(C.catLabel(p.cat))), fact("С поправкой на риск", fmtPct(p.ra)));
+    }
+    parts.push(`<dl class="facts">${f.join("")}</dl>`);
+    parts.push(`<div class="risk"><div class="risk-top"><span class="badge big t${p.tier}">T${p.tier}</span>
+        <div><b>Итоговый риск ${esc(C.tierName(p.tier))}</b><div class="hint">Берётся худший из трёх уровней</div></div></div>
+      <div class="risk-grid">${riskCell("Протокол", p.pt)}${riskCell("Активы", p.at)}${riskCell("Сеть", p.ct)}</div>
+      <p>${esc(pr ? pr.why : "Протокол не оценён вручную и получает T3 по умолчанию. Добавьте его в tiers.js после проверки аудитов, возраста и истории инцидентов.")}</p></div>`);
+    const flags = p.flags.map(k => T.flags[k] ? { level: T.flags[k].level, text: T.flags[k].text } : null).filter(Boolean);
+    if (m.share > C.DILUTION_WARN) flags.unshift({ level: 2, text: `Твой взнос — ${fmtShare(m.share)} пула: доход уже пересчитан с учётом разбавления, но вход и выход заметно сдвинут цену.` });
+    if (flags.length) parts.push(`<ul class="flags">${flags.map(x => `<li class="t${x.level}">${esc(x.text)}</li>`).join("")}</ul>`);
+    parts.push(`<div class="chart t${p.tier}" id="chart">${p.vh ? volumeChart(p) : '<p class="hint">Загружаем историю APY…</p>'}</div>`);
+    const acts = [];
+    if (p.url) acts.push(`<button class="btn" data-action="open-url" data-url="${esc(p.url)}">${p.src === "gt" ? "Открыть пул на GeckoTerminal" : p.src === "llama" ? "Открыть пул на DefiLlama" : "Открыть хранилище"}</button>`);
+    if (p.purl && p.purl !== p.url) acts.push(`<button class="btn ghost" data-action="open-url" data-url="${esc(p.purl)}">Перейти на сайт ${esc(p.pn)}</button>`);
+    parts.push(`<div class="actions">${acts.join("")}</div>`);
+    return parts.join("");
+  }
+
+  function volumeChart(p) {
+    const d = p.vh, W = 320, H = 120, P = 4;
+    const max = Math.max(1, ...d), avg = d.reduce((a, b) => a + b, 0) / d.length;
+    const bw = (W - 2 * P) / d.length;
+    const y = v => H - P - v / max * (H - 2 * P);
+    const bars = d.map((v, i) => `<rect class="bar" x="${(P + i * bw + 0.6).toFixed(1)}" y="${y(v).toFixed(1)}" width="${Math.max(1, bw - 1.2).toFixed(1)}" height="${(H - P - y(v)).toFixed(1)}"></rect>`).join("");
+    const end = new Date(); end.setUTCDate(end.getUTCDate() - 1);
+    const start = new Date(end); start.setUTCDate(end.getUTCDate() - d.length + 1);
+    return `<div class="chart-head"><b>Объём по дням</b><span class="hint">в среднем ${fmtUsd(avg)}, максимум ${fmtUsd(max)}</span></div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Дневной объём, в среднем ${fmtUsd(avg)}">${bars}
+        <line class="avg" x1="${P}" x2="${W - P}" y1="${y(avg).toFixed(1)}" y2="${y(avg).toFixed(1)}"></line></svg>
+      <div class="chart-axis hint"><span>${fmtDate(start)}</span><span>${fmtDate(end)}</span></div>`;
+  }
+
+  const chartCache = new Map();
+  async function loadApyChart(p) {
+    const el = () => document.getElementById("chart");
+    if (p.vh) return;
+    if (p.src !== "llama") { el().innerHTML = `<p class="hint">История доходности — на сайте протокола.</p>`; return; }
+    try {
+      let data = chartCache.get(p.id);
+      if (!data) {
+        const r = await fetch("https://yields.llama.fi/chart/" + encodeURIComponent(p.id));
+        if (!r.ok) throw new Error("DefiLlama ответил кодом " + r.status);
+        const j = await r.json();
+        data = ((j && j.data) || []).filter(x => typeof x.apy === "number" && x.timestamp).slice(-90);
+        chartCache.set(p.id, data);
+      }
+      if (state.sheetPool !== p || !el()) return;
+      el().innerHTML = apyChart(data);
+    } catch (e) {
+      if (state.sheetPool === p && el()) el().innerHTML = `<p class="hint">История APY не загрузилась: ${esc(e.message)}.</p>`;
+    }
+  }
+  function apyChart(d) {
+    if (d.length < 2) return `<p class="hint">Пока мало истории для графика.</p>`;
+    const W = 320, H = 120, P = 6, ys = d.map(x => x.apy);
+    const mn = Math.min(...ys), mx = Math.max(...ys);
+    let lo = mn, hi = mx; if (hi - lo < 0.05) { hi += 0.5; lo = Math.max(0, lo - 0.5); }
+    const x = i => P + i * (W - 2 * P) / (d.length - 1), y = v => H - P - (v - lo) / (hi - lo) * (H - 2 * P);
+    const avg = ys.reduce((a, b) => a + b, 0) / ys.length;
+    return `<div class="chart-head"><b>APY за ${d.length} ${plural(d.length, "день", "дня", "дней")}</b><span class="hint">от ${fmtPct(mn)} до ${fmtPct(mx)}, в среднем ${fmtPct(avg)}</span></div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="График APY"><line class="avg" x1="${P}" x2="${W - P}" y1="${y(avg).toFixed(1)}" y2="${y(avg).toFixed(1)}"></line>
+      <polyline class="line" points="${d.map((v, i) => x(i).toFixed(1) + "," + y(v.apy).toFixed(1)).join(" ")}"></polyline></svg>
+      <div class="chart-axis hint"><span>${fmtDate(new Date(d[0].timestamp))}</span><span>${fmtDate(new Date(d[d.length - 1].timestamp))}</span></div>`;
+  }
+
+  function openSheet(id) {
+    const p = state.byId.get(id);
+    if (!p) return;
+    haptic();
+    state.sheetPool = p;
+    $("#sheet-body").innerHTML = sheetHTML(p);
+    const sheet = $("#sheet");
+    sheet.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => sheet.classList.add("open")));
+    document.body.style.overflow = "hidden";
+    if (tgAtLeast("6.1")) tg.BackButton.show();
+    if (inTelegram() && p.url) { try { tg.MainButton.setText(p.src === "gt" ? "Открыть пул" : "Открыть " + p.pn); tg.MainButton.show(); } catch (e) {} }
+    loadApyChart(p);
+    const x = sheet.querySelector(".x"); if (x) x.focus({ preventScroll: true });
+  }
+  function closeSheet() {
+    const sheet = $("#sheet");
+    if (sheet.hidden) return;
+    sheet.classList.remove("open");
+    state.sheetPool = null;
+    document.body.style.overflow = "";
+    if (tgAtLeast("6.1")) tg.BackButton.hide();
+    if (inTelegram()) { try { tg.MainButton.hide(); } catch (e) {} }
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setTimeout(() => { if (!sheet.classList.contains("open")) sheet.hidden = true; }, reduce ? 0 : 260);
+  }
+
+  /* ---------- события ---------- */
+  const rerender = () => { state.limit = PAGE; renderResults(); };
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest("[data-tab],[data-profile],[data-sub],[data-toggle],[data-action],[data-view],[data-sort],[data-id]");
+    if (!el) { if (e.target.id === "sheet") closeSheet(); return; }
+    const d = el.dataset;
+    if (d.tab) {
+      if (state.tab === d.tab) return;
+      state.tab = d.tab; state.animateLadder = true; haptic(); renderControls(); rerender(); window.scrollTo(0, 0);
+    } else if (d.profile) { state.profile = Number(d.profile); haptic(); renderControls(); rerender(); }
+    else if (d.sub) { state[d.sub] = d.v; haptic(); renderControls(); rerender(); }
+    else if (d.toggle) { state[d.toggle] = !state[d.toggle]; haptic(); renderControls(); rerender(); }
+    else if (d.view) { state.view[state.tab] = d.view; haptic(); renderResults(); }
+    else if (d.sort) { state.sort[state.tab] = d.sort; haptic(); renderControls(); rerender(); }
+    else if (d.action === "more") { state.limit += PAGE; renderResults(); }
+    else if (d.action === "retry") { load(); }
+    else if (d.action === "close") { closeSheet(); }
+    else if (d.action === "open-url") { openLink(d.url); }
+    else if (d.id) { openSheet(d.id); }
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") closeSheet();
+    if (e.key === "Enter" && e.target.matches && e.target.matches("tr[data-id]")) openSheet(e.target.dataset.id);
+  });
+  let capTimer = null;
+  $("#controls").addEventListener("input", e => {
+    if (e.target.id !== "capital") return;
+    const v = Number(String(e.target.value).replace(/[^\d]/g, ""));
+    if (!(v > 0)) return;
+    state.capital = v;
+    clearTimeout(capTimer);
+    capTimer = setTimeout(() => { saveCapital(); renderResults(); }, 250);
+  });
+  $("#controls").addEventListener("change", e => {
+    const id = e.target.id;
+    if (id === "capital") { e.target.value = NF0.format(state.capital); return; }
+    if (id === "minTvl") state.minTvl = Number(e.target.value);
+    else if (id === "chain") state.chain = e.target.value;
+    else if (id === "sort") state.sort[state.tab] = e.target.value;
+    else if (id === "asset") state.asset = e.target.value;
+    else return;
+    rerender();
+  });
+
+  if (!T || !C) {
+    $("#results").innerHTML = `<div class="state"><h2>Не найдены файлы приложения</h2><p>Положите tiers.js и core.js рядом с index.html.</p></div>`;
+    return;
+  }
+  initTelegram();
+  loadCapital();
+  load();
+})();
+</script>
+</body>
+</html>
