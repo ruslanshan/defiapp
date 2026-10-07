@@ -121,17 +121,19 @@ class Http:
     def gt_blocked(self) -> bool:
         return self.keyless_off and self.cg_left <= 0
 
-    def gt(self, path, params=None):
-        """Данные GeckoTerminal. Сначала бесплатный API без ключа (лимит делят все проекты на серверах
-        GitHub), при отказе — тот же запрос через CoinGecko Demo API по ключу COINGECKO_API_KEY."""
-        if not self.keyless_off:
+    def gt(self, path, params=None, prefer_key=False):
+        """Данные GeckoTerminal.
+        Списки пулов — сначала бесплатно, без ключа: с общих серверов GitHub GeckoTerminal пускает
+        примерно раз в 15 секунд, но пускает. Ключ CoinGecko (свой лимит, 10 000 запросов в месяц) бережём
+        для объёмов за 30 дней (prefer_key=True) и для случаев, когда без ключа не пускают совсем."""
+        if not (prefer_key and self.cg_left > 0) and not self.keyless_off:
             wait = self._last_gt + self.gt_gap - time.time()
             if wait > 0:
                 time.sleep(wait)
             self._last_gt = time.time()
             try:
                 data = self.get(GT_API + path, params=params, headers={"Accept": "application/json;version=20230302"},
-                                retries=1 if self.cg_left > 0 else 3, backoff=15)
+                                retries=3, backoff=15)
                 self.keyless_streak = 0
                 return data
             except RateLimited:
@@ -139,14 +141,14 @@ class Http:
                 self.gt_gap = min(self.gt_gap * 1.5, 12.0)
                 if self.keyless_streak >= 3:
                     self.keyless_off = True
-                    log.warning("GeckoTerminal без ключа ограничил запросы%s",
+                    log.warning("GeckoTerminal без ключа не пускает%s",
                                 " — дальше через CoinGecko Demo API" if self.cg_left > 0
-                                else ", а ключа COINGECKO_API_KEY нет — остальное дособеру в следующий запуск")
+                                else ", а запросов по ключу на сегодня не осталось — остальное в следующий запуск")
                 if self.cg_left <= 0:
                     raise
         if self.cg_left <= 0:
             raise RateLimited("лимит запросов исчерпан")
-        wait = self._last_cg + 2.2 - time.time()  # Demo-ключ: до 30 запросов в минуту
+        wait = self._last_cg + 2.2 - time.time()  # Demo-ключ: до 30 запросов в минуту с запасом
         if wait > 0:
             time.sleep(wait)
         self._last_cg = time.time()
@@ -308,7 +310,8 @@ def collect_llama(http: Http, clf: S.Classifier, cfg: dict) -> list[dict]:
                 rec["tvl"], rec["free"], rec["util"] = lb[0], lb[0] - lb[1], round(lb[1] / lb[0], 4)
             else:
                 rec["free"] = tvl
-        if rec["cat"] == "dex" and rec["fee"] and rec["kind"] in ("pair", "stable"):
+        if rec["cat"] == "dex" and rec["fee"] and rec["kind"] in ("pair", "stable") \
+                and (pr or {}).get("fee_model") != "ve33":
             v7 = rec.pop("_v7", None)
             if v7:
                 rec["v1d"], rec["vsrc"] = v7 / 7, "7d"
@@ -380,29 +383,43 @@ def fetch_hlp(http: Http) -> dict | None:
 
 # ---------------------------------------------------------------- GeckoTerminal
 
-def resolve_networks(http: Http, cfg: dict) -> list[tuple[str, str]]:
+def resolve_networks(http: Http, cfg: dict, meta: dict, today: str):
+    """id сетей GeckoTerminal. Список сетей меняется редко — запрашиваем раз в сутки, иначе берём из прошлой выгрузки."""
+    chains = [n["chain"] for n in cfg["networks"]]
+    cached = meta.get("gtNets") or {}
+    if meta.get("gtNetsDate") == today and all(c in cached for c in chains):
+        return [(c, cached[c]) for c in chains if cached[c]], cached, today
     known = {}
-    try:
-        for page in range(1, 8):
+    for page in range(1, 8):
+        try:
             rows = http.gt("/networks", {"page": page}).get("data") or []
-            if not rows:
-                break
-            for r in rows:
-                known[r.get("id")] = str((r.get("attributes") or {}).get("name") or "")
-    except Exception as e:  # noqa: BLE001
-        log.warning("Список сетей GeckoTerminal не получен (%s), беру id из config.json", e)
-    out = []
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else None
+            if not (page > 1 and code in (400, 404)):  # 400 на следующей странице — просто конец списка
+                log.warning("Список сетей GeckoTerminal не получен (%s)", e)
+            break
+        except Exception as e:  # noqa: BLE001
+            log.warning("Список сетей GeckoTerminal не получен (%s)", e)
+            break
+        if not rows:
+            break
+        for r in rows:
+            known[r.get("id")] = str((r.get("attributes") or {}).get("name") or "")
+    out, resolved = [], {}
     for n in cfg["networks"]:
         gid = n.get("gt")
         if known and gid not in known:
             m = (n.get("match") or n["chain"]).lower()
             cands = [k for k, name in known.items() if k and (k.lower() == m or m in name.lower())]
             gid = cands[0] if cands else None
+        elif not known:
+            gid = cached.get(n["chain"], gid)  # список не получен — берём id из прошлого раза или из config.json
+        resolved[n["chain"]] = gid
         if gid:
             out.append((n["chain"], gid))
         else:
             log.warning("Сеть %s не найдена в GeckoTerminal — пропускаю", n["chain"])
-    return out
+    return out, resolved, today if known else meta.get("gtNetsDate")
 
 
 def gt_record(d: dict, inc: dict, chain: str, net: str, clf: S.Classifier, cfg: dict) -> dict | None:
@@ -430,6 +447,8 @@ def gt_record(d: dict, inc: dict, chain: str, net: str, clf: S.Classifier, cfg: 
         lookup = "uniswap-v3" if S.parse_fee(name) else "uniswap-v2"  # например, uniswap-bsc — это V3
     prot = S.protocol_info(lookup, name)
     pr = prot["pr"]
+    if pr and pr.get("fee_model") == "ve33":
+        return None  # Aerodrome/Velodrome: доход — эмиссия, комиссия динамическая; такие пулы берём из DefiLlama
     fee = S.parse_fee(name) or (pr or {}).get("fee_default")
     if not fee:
         return None  # без уровня комиссии доход по формуле таблицы не посчитать
@@ -453,41 +472,91 @@ def gt_record(d: dict, inc: dict, chain: str, net: str, clf: S.Classifier, cfg: 
 
 
 def gt_daily_volumes(http: Http, net: str, addr: str) -> list[float]:
-    j = http.gt(f"/networks/{net}/pools/{addr}/ohlcv/day", {"aggregate": 1, "limit": 31, "currency": "usd"})
+    j = http.gt(f"/networks/{net}/pools/{addr}/ohlcv/day", {"aggregate": 1, "limit": 31, "currency": "usd"},
+                prefer_key=True)
     rows = ((j.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
     today = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
     full = sorted((r for r in rows if r and len(r) >= 6 and int(r[0]) < today), key=lambda r: r[0])[-30:]
     return [num(r[5]) or 0.0 for r in full]
 
 
-def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float, cache: dict) -> tuple[list[dict], dict]:
-    nets = resolve_networks(http, cfg)
+GT_INCLUDE = "base_token,quote_token,dex"
+
+
+def _add_rows(j: dict, chain: str, net: str, clf: S.Classifier, cfg: dict, by_id: dict) -> int:
+    inc = {i.get("id"): i for i in (j.get("included") or [])}
+    rows = j.get("data") or []
+    for d in rows:
+        rec = gt_record(d, inc, chain, net, clf, cfg)
+        if rec:
+            by_id[rec["id"]] = rec
+    return len(rows)
+
+
+def gt_discover(http: Http, clf: S.Classifier, cfg: dict, chain: str, net: str, by_id: dict, deadline: float) -> bool:
+    """Полный поиск: самые активные пулы сети, страница за страницей."""
+    for page in range(1, cfg["gt_pages_per_network"] + 1):
+        if time.time() > deadline:
+            return page > 1
+        try:
+            j = http.gt(f"/networks/{net}/pools", {"page": page, "sort": "h24_volume_usd_desc", "include": GT_INCLUDE})
+        except Exception as e:  # noqa: BLE001
+            log.warning("GeckoTerminal %s, стр. %s: %s", net, page, e)
+            return page > 1
+        if not _add_rows(j, chain, net, clf, cfg, by_id):
+            break
+    return True
+
+
+def gt_refresh(http: Http, clf: S.Classifier, cfg: dict, chain: str, net: str, addrs: list[str], by_id: dict,
+               deadline: float, stale: set) -> bool:
+    """Обновление уже известных пулов: до 30 пулов одним запросом."""
+    ok = False
+    for i in range(0, len(addrs), 30):
+        chunk = addrs[i:i + 30]
+        if time.time() > deadline:
+            stale.update(f"gt:{net}:{x}" for x in chunk)
+            continue
+        try:
+            j = http.gt(f"/networks/{net}/pools/multi/{','.join(chunk)}", {"include": GT_INCLUDE})
+        except Exception as e:  # noqa: BLE001
+            log.warning("GeckoTerminal %s, обновление пулов: %s", net, e)
+            stale.update(f"gt:{net}:{x}" for x in chunk)
+            continue
+        _add_rows(j, chain, net, clf, cfg, by_id)
+        ok = True
+    return ok
+
+
+def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float, cache: dict, meta: dict):
+    today = datetime.now(timezone.utc).date().isoformat()
+    nets, resolved, nets_date = resolve_networks(http, cfg, meta, today)
+    discover = meta.get("gtDiscovery") != today  # полный поиск пулов — раз в сутки
     by_id: dict[str, dict] = {}
     stopped = False
     failed: set[str] = set()
+    stale_ids: set[str] = set()
+    empty: set[str] = set(meta.get("gtEmpty") or []) if not discover else set()
     for chain, net in nets:
-        for page in range(1, cfg["gt_pages_per_network"] + 1):
-            if time.time() > deadline:
-                stopped = True
-                break
-            try:
-                j = http.gt(f"/networks/{net}/pools",
-                            {"page": page, "sort": "h24_volume_usd_desc", "include": "base_token,quote_token,dex"})
-            except Exception as e:  # noqa: BLE001
-                log.warning("GeckoTerminal %s, стр. %s: %s", net, page, e)
-                if page == 1:
-                    failed.add(net)
-                break
-            rows = j.get("data") or []
-            if not rows:
-                break
-            inc = {i.get("id"): i for i in (j.get("included") or [])}
-            for d in rows:
-                rec = gt_record(d, inc, chain, net, clf, cfg)
-                if rec:
-                    by_id[rec["id"]] = rec
+        if time.time() > deadline:
+            stopped = True
+            failed.add(net)
+            continue
+        known = [pid.split(":", 2)[2] for pid, p in cache.items() if p.get("net") == net and pid.startswith("gt:")]
+        if not discover and not known and net in (meta.get("gtEmpty") or []):
+            continue  # при сегодняшнем поиске подходящих пулов в этой сети не нашлось
+        if discover or not known:
+            before = len(by_id)
+            ok = gt_discover(http, clf, cfg, chain, net, by_id, deadline)
+            if ok and len(by_id) == before:
+                empty.add(net)
+        else:
+            ok = gt_refresh(http, clf, cfg, chain, net, known, by_id, deadline, stale_ids)
+        if not ok:
+            failed.add(net)
     recs = list(by_id.values())
-    log.info("GeckoTerminal: %d подходящих пулов в %d сетях, отказов по лимиту: %d", len(recs), len(nets), http.rate_limited)
+    log.info("GeckoTerminal (%s): %d подходящих пулов в %d сетях, отказов по лимиту: %d",
+             "полный поиск пулов" if discover else "обновление известных пулов", len(recs), len(nets), http.rate_limited)
 
     # Дневной объём за 30 дней — отдельный запрос на пул. История меняется раз в сутки, поэтому берём её
     # из прошлой выгрузки, если она уже включает вчерашний день, и запрашиваем только недостающее.
@@ -495,16 +564,19 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float, cache:
     top_vol = sorted(recs, key=lambda r: r["v24"], reverse=True)[: n // 2]
     top_apr = sorted(recs, key=lambda r: r["v24"] * r["fee"] / r["tvl"], reverse=True)
     pick = list({r["id"]: r for r in top_vol + top_apr}.values())[:n]
-    yday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-    oldest_ok = (datetime.now(timezone.utc).date() - timedelta(days=4)).isoformat()
+    max_age = cfg.get("ohlcv_max_age_days", 2)  # среднее за 30 дней от одного дня почти не меняется
+    day0 = datetime.now(timezone.utc).date()
+    yday = (day0 - timedelta(days=1)).isoformat()
+    fresh_cut = (day0 - timedelta(days=max_age)).isoformat()
+    oldest_ok = (day0 - timedelta(days=max_age + 3)).isoformat()
     cached = fresh = 0
     for r in recs:  # из кэша берём историю для всех пулов, не только для выбранных
         c = cache.get(r["id"])
         if c and c.get("vh") and str(c.get("vhd", "")) >= oldest_ok:
             r["vh"], r["vhd"] = c["vh"], c["vhd"]
             cached += 1
-            fresh += c["vhd"] >= yday
-    todo = [r for r in pick if r.get("vhd", "") < yday]
+            fresh += c["vhd"] >= fresh_cut
+    todo = [r for r in pick if r.get("vhd", "") < fresh_cut]
     todo.sort(key=lambda r: "vh" in r)  # сначала пулы вообще без истории, потом устаревшие
     log.info("Объём за 30 дней: %d пулов из прошлой выгрузки (свежих %d), запросить: %d", cached, fresh, len(todo))
     done = 0
@@ -542,14 +614,20 @@ def collect_gt(http: Http, clf: S.Classifier, cfg: dict, deadline: float, cache:
         pr = r.pop("_pr")
         out.append(finish(r, pr))
     # Сеть не ответила вовсе — показываем её пулы из прошлой выгрузки, чтобы они не пропали с сайта
-    reused = [dict(p, stale=True) for p in cache.values() if p.get("net") in failed and p["id"] not in by_id]
+    ve33 = {pr["id"] for pr in S.tiers()["protocols"] if pr.get("fee_model") == "ve33"}
+    reused = [dict(p, stale=True) for pid, p in cache.items()
+              if pid not in by_id and p.get("proto") not in ve33 and (p.get("net") in failed or pid in stale_ids)]
     if reused:
-        log.warning("Сети без ответа: %s — взял %d пулов из прошлой выгрузки", ", ".join(sorted(failed)), len(reused))
+        log.warning("Не обновились: %s — взял %d пулов из прошлой выгрузки",
+                    ", ".join(sorted(failed)) or "часть пулов", len(reused))
     out += reused
     with30 = sum(1 for r in out if r.get("v30") is not None)
+    new_meta = {"gtNets": resolved, "gtNetsDate": nets_date,
+                "gtDiscovery": today if discover and len(failed) < len(nets) else meta.get("gtDiscovery"),
+                "gtEmpty": sorted(empty)}
     return out, {"status": "ok" if out else "empty", "count": len(out), "with30d": with30, "fetched30d": done,
                  "networks": [c for c, _ in nets], "partial": stopped, "rateLimited": http.rate_limited,
-                 "viaKey": http.cg_used}
+                 "viaKey": http.cg_used, "mode": "discover" if discover else "refresh"}, new_meta
 
 
 # ---------------------------------------------------------------- сборка
@@ -609,6 +687,7 @@ def main() -> int:
     http = Http(cfg["gt_requests_per_minute"], key, cfg.get("coingecko_daily_calls", 300) - used_today)
     log.info("Ключ CoinGecko: %s", f"есть, сегодня осталось запросов: {http.cg_left}" if key else "нет")
     cache = {p["id"]: p for p in prev.get("pools", []) if p.get("src") == "gt"}
+    meta = prev.get("meta") or {}
     sources: dict[str, dict] = {}
 
     universe, sources["coingecko"] = build_universe(http, cfg["universe_size"])
@@ -638,7 +717,7 @@ def main() -> int:
     if not args.skip_gt:
         try:
             budget = cfg.get("budget_minutes", 20) * 60
-            gt, sources["geckoterminal"] = collect_gt(http, clf, cfg, started + budget, cache)
+            gt, sources["geckoterminal"], meta = collect_gt(http, clf, cfg, started + budget, cache, meta)
             keys = {dedupe_key(r) for r in gt if r.get("keytoks")}
             for r in pools:  # тот же пул из DefiLlama прячем в «Парах», но оставляем в «Наградах»
                 if r["src"] == "llama" and r["cat"] == "dex" and dedupe_key(r) in keys:
@@ -656,7 +735,7 @@ def main() -> int:
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tiersVersion": S.tiers()["version"], "capitalDefault": CAPITAL_DEFAULT,
         "sources": sources, "universe": universe, "pools": [compact(p) for p in pools],
-        "quota": {"date": today, "cg": used_today + http.cg_used},
+        "quota": {"date": today, "cg": used_today + http.cg_used}, "meta": meta,
     }
     out = Path(args.out)
     tmp = out.with_suffix(".tmp")

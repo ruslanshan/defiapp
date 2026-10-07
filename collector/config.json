@@ -7,6 +7,7 @@
   "ohlcv_pools": 200,
   "budget_minutes": 20,
   "coingecko_daily_calls": 300,
+  "ohlcv_max_age_days": 2,
   "networks": [
     {"chain": "Ethereum",  "gt": "eth"},
     {"chain": "Arbitrum",  "gt": "arbitrum"},
