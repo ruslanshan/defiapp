@@ -475,6 +475,12 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
       ${youStrip(p)}${state.tab === "rewards" ? rewardLine(p) : ""}</button>`;
   }
 
+  /* Откуда объём за день: 30 дней (без пометки), меньше 30 дней, 7 дней или последние сутки */
+  function volMark(p) {
+    if (p.v30 != null) return p.vdays < 30 ? `<sup>${p.vdays}д</sup>` : "";
+    return p.vsrc === "7d" ? "<sup>7д</sup>" : "<sup>24ч</sup>";
+  }
+
   /* Колонки таблицы. hl — последние 4 показателя, их подсвечиваем */
   function columns() {
     const pool = { label: "Пул", cls: "l", td: p => `<span class="badge t${p.tier}">T${p.tier}</span>${esc(p.sym)}` };
@@ -487,7 +493,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
       { label: "Доход в месяц", cls: "hl", sort: "month", td: p => fmtCash(p.m.month) },
       { label: "APR", cls: "hl apr", sort: "apr", td: p => fmtApr(p.m.apr) }
     ];
-    const v1d = { label: "Объём 1 день", td: p => p.v1d == null ? "—" : fmtUsd(p.v1d) + (p.v30 == null ? "<sup>24ч</sup>" : p.vdays < 30 ? `<sup>${p.vdays}д</sup>` : "") };
+    const v1d = { label: "Объём 1 день", td: p => p.v1d == null ? "—" : fmtUsd(p.v1d) + volMark(p) };
     const volTvl = { label: "Объём / TVL", sort: "voltvl", td: p => fmtRatio(p.m.volTvl) };
     const feesDay = { label: "Комиссии пула в сутки", td: p => fmtCash(p.m.feesDay) };
     if (state.tab === "pairs") return [pool, chain, proto,
@@ -600,7 +606,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
       ${tags(byVal(A.stable, 1), 1)}${tags(byVal(A.stable, 2), 2)}${tags(byVal(A.stable, 3), 3)}
 
       <h3>Ограничения</h3>
-      <p>Классификация экспертная, версия ${esc(T.version)}, правится в файле tiers.js. Объём за 30 дней собирается для 200 самых активных пулов, у остальных расчёт идёт по объёму за последние 24 часа (в таблице помечено «24ч»). Это аналитический инструмент, а не инвестиционная рекомендация.</p>
+      <p>Классификация экспертная, версия ${esc(T.version)}, правится в файле tiers.js. Объём за 30 дней собирается для 200 самых активных пулов, у остальных расчёт идёт по среднему за 7 дней («7д», данные DefiLlama) или по последним 24 часам («24ч»). Это аналитический инструмент, а не инвестиционная рекомендация.</p>
     </article>`;
   }
 
@@ -625,7 +631,8 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-
     if (C.hasFees(p)) {
       f.push(fact("Уровень комиссии", fmtFee(p.fee)), fact("TVL", fmtUsd(p.tvl)),
         fact("Объём за 30 дней", p.v30 != null ? fmtUsd(p.v30) : "нет данных"),
-        fact(p.v30 != null && p.vdays < 30 ? `Объём в день (среднее за ${p.vdays} ${plural(p.vdays, "день", "дня", "дней")})` : "Объём за 1 день", fmtUsd(p.v1d)),
+        fact(p.v30 != null ? (p.vdays < 30 ? `Объём в день (среднее за ${p.vdays} ${plural(p.vdays, "день", "дня", "дней")})` : "Объём за 1 день (среднее за 30 дней)")
+          : p.vsrc === "7d" ? "Объём за 1 день (среднее за 7 дней)" : "Объём за 1 день (последние 24 ч)", fmtUsd(p.v1d)),
         fact("Объём за последние 24 ч", fmtUsd(p.v24)), fact("Объём / TVL", fmtRatio(m.volTvl)),
         fact("Комиссии пула в сутки", fmtCash(m.feesDay)), fact("С поправкой на риск", fmtPct(p.ra)));
       if (p.age != null) f.push(fact("Возраст пула", `${p.age} ${plural(p.age, "день", "дня", "дней")}`));
